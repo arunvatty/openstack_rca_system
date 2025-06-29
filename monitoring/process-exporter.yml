@@ -1,0 +1,13 @@
+process_names:
+  - name: "python"
+    cmdline:
+      - 'python.*'
+    
+  - name: "streamlit"
+    cmdline:
+      - '.*streamlit.*'
+
+  - name: "rca-application"
+    cmdline:
+      - '.*main\.py.*'
+      - '.*chatbot\.py.*'

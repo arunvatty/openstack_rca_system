@@ -1,0 +1,58 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'openstack-rca'
+    environment: 'production'
+
+rule_files:
+  - "rules/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+  # Process exporter for Python processes
+  - job_name: 'process-exporter'
+    static_configs:
+      - targets: ['process-exporter:9256']
+    scrape_interval: 15s
+
+  # Application metrics via file service discovery
+  - job_name: 'rca-application'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/file_sd/app_metrics.json'
+        refresh_interval: 30s
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Streamlit application health check
+  - job_name: 'rca-streamlit'
+    static_configs:
+      - targets: ['host.docker.internal:8501']
+    scrape_interval: 30s
+    metrics_path: '/health'
+    scrape_timeout: 10s
+
+  # Custom application metrics endpoint
+  - job_name: 'rca-custom-metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8502']
+    scrape_interval: 15s
+    metrics_path: '/metrics'

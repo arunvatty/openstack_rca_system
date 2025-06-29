@@ -1,0 +1,92 @@
+groups:
+  - name: rca_application_alerts
+    rules:
+      # Application availability
+      - alert: RCAApplicationDown
+        expr: up{job="rca-streamlit"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: rca-application
+        annotations:
+          summary: "RCA Application is down"
+          description: "The OpenStack RCA application has been down for more than 2 minutes"
+
+      # High memory usage
+      - alert: RCAHighMemoryUsage
+        expr: (process_resident_memory_bytes{job="process-exporter",groupname="python"} / 1024 / 1024) > 2048
+        for: 5m
+        labels:
+          severity: warning
+          service: rca-application
+        annotations:
+          summary: "RCA Application high memory usage"
+          description: "Python process is using {{ $value }}MB of memory"
+
+      # API response time
+      - alert: RCASlowAPIResponse
+        expr: rca_api_request_duration_seconds{quantile="0.95"} > 30
+        for: 3m
+        labels:
+          severity: warning
+          service: rca-api
+        annotations:
+          summary: "RCA API slow response times"
+          description: "95th percentile API response time is {{ $value }}s"
+
+      # Error rate
+      - alert: RCAHighErrorRate
+        expr: rate(rca_errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: rca-application
+        annotations:
+          summary: "High error rate in RCA application"
+          description: "Error rate is {{ $value }} errors per second"
+
+      # LSTM model performance
+      - alert: RCAModelLowAccuracy
+        expr: rca_lstm_model_accuracy < 0.8
+        for: 1m
+        labels:
+          severity: warning
+          service: rca-ml
+        annotations:
+          summary: "LSTM model accuracy degraded"
+          description: "Model accuracy is {{ $value }}, below threshold of 0.8"
+
+      # Disk space for logs
+      - alert: RCALogDiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/var/log"} / node_filesystem_size_bytes{mountpoint="/var/log"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Low disk space for logs"
+          description: "Only {{ $value }}% disk space remaining for logs"
+
+  - name: rca_system_alerts
+    rules:
+      # CPU usage
+      - alert: RCAHighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%"
+
+      # Load average
+      - alert: RCAHighLoadAverage
+        expr: node_load1 > 4
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High load average"
+          description: "Load average is {{ $value }}"

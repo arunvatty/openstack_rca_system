@@ -68,7 +68,7 @@ python main.py --mode train --logs path/to/your/logs
 Launch the interactive dashboard:
 
 ```bash
-python main.py --mode web
+python main.py --mode streamlit
 ```
 
 Then visit `http://localhost:8501` in your browser.
@@ -220,5 +220,136 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Discussions**: [GitHub Discussions](https://github.com/YOUR_USERNAME/openstack-rca-system/discussions)
 
 ---
+
+## Issues and RCA samples
+
+# User-Facing OpenStack Errors Requiring RCA
+
+## 1. **Instance Creation Failures**
+
+### What Users See:
+```
+ERROR: No valid host was found. There are not enough hosts available.
+Status: ERROR
+Fault: NoValidHost
+```
+
+### User Experience:
+- Instance creation request accepted (HTTP 202)
+- Instance stuck in "BUILD" status
+- Eventually transitions to "ERROR" state
+- Users cannot access their VM
+
+### RCA from Logs:
+- **Disk Space**: Hosts have insufficient disk (cp-1: 2GB available, needs 20GB)
+- **Memory**: Insufficient RAM (needs 8192MB, only 6172MB available)
+- **Resource Exhaustion**: 95% memory usage, overcommitment ratio exceeded
+
+---
+
+## 2. **API Service Unavailable**
+
+### What Users See:
+```
+HTTP 500 Internal Server Error
+"The server encountered an unexpected condition"
+```
+
+### User Experience:
+- Dashboard becomes unresponsive
+- API calls fail intermittently
+- Cannot perform any OpenStack operations
+
+### RCA from Logs:
+- **Database Connection Issues**: MySQL server connection timeout
+- **Connection Pool Exhausted**: Database connection pool depleted
+- **Service Cascade Failure**: nova-api, nova-scheduler, nova-compute all affected
+
+---
+
+## 3. **Network Configuration Failures**
+
+### What Users See:
+```
+Instance Status: ERROR
+"Network setup failed during instance creation"
+```
+
+### User Experience:
+- VM appears to start but becomes inaccessible
+- No network connectivity to instance
+- Instance automatically terminated
+
+### RCA from Logs:
+- **VIF Plugging Timeout**: Port 4f8a7b6c-5d4e-3f2a-1b0c-9e8d7c6b5a4f failed
+- **Neutron Service Down**: Connection refused (111) to neutron
+- **Network Agent Failure**: Cannot communicate with neutron agents
+
+---
+
+## 4. **Resource Allocation Failures**
+
+### What Users See:
+```
+ERROR: Insufficient resources available
+"Unable to schedule instance on any compute host"
+```
+
+### User Experience:
+- Instance creation repeatedly fails
+- No clear indication of which resource is constrained
+- Users may try different flavors unsuccessfully
+
+### RCA from Logs:
+- **Memory Pressure**: System using 95% of physical RAM
+- **Overcommitment Issues**: Memory ratio 1.5 exceeded
+- **Resource Claim Failures**: 8192MB requested, only 6172MB free
+
+---
+
+## 5. **Service Connectivity Issues**
+
+### What Users See:
+```
+"Service temporarily unavailable"
+HTTP timeouts in dashboard
+Intermittent connection failures
+```
+
+### User Experience:
+- Sporadic access to OpenStack services
+- Operations may succeed after multiple retries
+- Unpredictable service behavior
+
+### RCA from Logs:
+- **RPC Call Failures**: MessagingTimeout to nova-compute
+- **Service Heartbeat Lost**: Database connection issues
+- **Inter-service Communication**: nova-conductor timeouts
+
+---
+
+## Common RCA Questions Users Ask:
+
+1. **"Why did my instance creation fail?"**
+   - Answer: Resource exhaustion (disk/memory) or network issues
+
+2. **"Why is the OpenStack dashboard slow/unresponsive?"**
+   - Answer: Database connectivity problems and connection pool exhaustion
+
+3. **"Why can't I connect to my VM?"**
+   - Answer: Network VIF plugging failures and neutron service issues
+
+4. **"Why do I get 'No valid host' errors?"**
+   - Answer: All compute hosts lack sufficient resources (RAM/disk)
+
+5. **"Why are OpenStack services intermittently failing?"**
+   - Answer: Database connection issues causing cascade failures across services
+
+## Impact Assessment:
+
+- **Availability**: Multiple service outages affecting user operations
+- **Performance**: Degraded response times due to resource constraints  
+- **Reliability**: Cascade failures affecting multiple OpenStack components
+- **User Experience**: Failed instance deployments and network connectivity issues
 
 **⭐ Star this repo if you find it helpful!**
