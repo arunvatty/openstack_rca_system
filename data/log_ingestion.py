@@ -4,6 +4,7 @@ from typing import List, Dict
 import logging
 from pathlib import Path
 from utils.log_parser import OpenStackLogParser
+from services.vector_db_service import VectorDBService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -11,13 +12,24 @@ logger = logging.getLogger(__name__)
 class LogIngestionManager:
     """Manager for ingesting OpenStack log files"""
     
-    def __init__(self, data_dir: str = 'logs'):
+    def __init__(self, data_dir: str = 'logs', enable_chunking: bool = False):
         self.data_dir = Path(data_dir)
         self.parser = OpenStackLogParser()
         self.supported_extensions = ['.log', '.txt']
+        self.enable_chunking = enable_chunking
         
         # Create data directory if it doesn't exist
         self.data_dir.mkdir(exist_ok=True)
+        
+        # NEW: Initialize vector database service
+        try:
+            self.vector_db = VectorDBService()
+            logger.info("VectorDBService initialized successfully")
+            if enable_chunking:
+                logger.info("Chunking enabled for long log entries")
+        except Exception as e:
+            logger.warning(f"Failed to initialize VectorDBService: {e}")
+            self.vector_db = None
     
     def discover_log_files(self, directory: str = None) -> List[Path]:
         """Discover log files in the specified directory"""
@@ -41,6 +53,17 @@ class LogIngestionManager:
                 df['ingestion_time'] = pd.Timestamp.now()
                 df['file_size'] = os.path.getsize(file_path)
                 logger.info(f"Successfully ingested {len(df)} log entries from {file_path}")
+                
+                # NEW: Store logs in vector database
+                if self.vector_db:
+                    try:
+                        logs_added = self.vector_db.add_logs(df, enable_chunking=self.enable_chunking)
+                        logger.info(f"Added {logs_added} logs to vector database")
+                    except Exception as e:
+                        logger.error(f"Failed to add logs to vector database: {e}")
+                
+                return df
+            
             else:
                 logger.warning(f"No data extracted from {file_path}")
             
@@ -79,6 +102,15 @@ class LogIngestionManager:
             combined_df = combined_df.sort_values('timestamp').reset_index(drop=True)
         
         logger.info(f"Successfully ingested {len(combined_df)} total log entries")
+        
+        # NEW: Store logs in vector database
+        if self.vector_db:
+            try:
+                logs_added = self.vector_db.add_logs(combined_df, enable_chunking=self.enable_chunking)
+                logger.info(f"Added {logs_added} logs to vector database")
+            except Exception as e:
+                logger.error(f"Failed to add logs to vector database: {e}")
+        
         return combined_df
     
     def ingest_from_directory(self, directory: str) -> pd.DataFrame:
@@ -139,7 +171,17 @@ class LogIngestionManager:
             'services': df['service_type'].value_counts().to_dict() if 'service_type' in df.columns else {},
             'log_levels': df['level'].value_counts().to_dict() if 'level' in df.columns else {},
             'source_files': df['source_file'].nunique() if 'source_file' in df.columns else 0,
-            'unique_instances': df['instance_id'].nunique() if 'instance_id' in df.columns else 0
+            'unique_instances': df['instance_id'].nunique() if 'instance_id' in df.columns else 0,
+            'data_directory': self.data_dir,
+            'vector_db_available': self.vector_db is not None
         }
+        
+        # Get vector database stats if available
+        if self.vector_db:
+            try:
+                vector_stats = self.vector_db.get_collection_stats()
+                stats.update(vector_stats)
+            except Exception as e:
+                logger.error(f"Failed to get vector DB stats: {e}")
         
         return stats

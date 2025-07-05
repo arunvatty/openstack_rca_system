@@ -5,23 +5,41 @@ from datetime import datetime, timedelta
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import anthropic
 import logging
+
+from .ai_client import ClaudeClient
+from config.config import Config
+
+# NEW: Import vector database service
+try:
+    from services.vector_db_service import VectorDBService
+    VECTOR_DB_AVAILABLE = True
+except ImportError:
+    VECTOR_DB_AVAILABLE = False
+    logging.warning("VectorDBService not available - falling back to TF-IDF only")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class RCAAnalyzer:
-    """Root Cause Analysis engine using LSTM predictions and Claude API"""
+    """Root Cause Analysis engine using LSTM predictions, Vector DB, and Claude API"""
     
     def __init__(self, anthropic_api_key: str, lstm_model=None):
-        self.client = anthropic.Anthropic(api_key=anthropic_api_key)
+        self.client = ClaudeClient(anthropic_api_key)
         self.lstm_model = lstm_model
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=500,
             stop_words='english',
             ngram_range=(1, 2)
         )
+        
+        # NEW: Initialize vector database service
+        if VECTOR_DB_AVAILABLE:
+            try:
+                self.vector_db = VectorDBService()
+                logger.info("VectorDBService initialized for RCA analysis")
+            except Exception as e:
+                logger.warning(f"Failed to initialize VectorDBService: {e}")
         
         # Common OpenStack issue patterns
         self.issue_patterns = {
@@ -51,7 +69,7 @@ class RCAAnalyzer:
         """Analyze an issue and provide root cause analysis"""
         logger.info(f"Analyzing issue: {issue_description}")
         
-        # Step 1: Filter relevant logs using LSTM predictions
+        # Step 1: Filter relevant logs using LSTM predictions and Vector DB
         relevant_logs = self._filter_relevant_logs(logs_df, issue_description)
         
         # Step 2: Identify issue category
@@ -63,7 +81,7 @@ class RCAAnalyzer:
         # Step 4: Analyze patterns
         patterns = self._analyze_patterns(relevant_logs, issue_category)
         
-        # Step 5: Generate RCA using Claude API
+        # Step 5: Generate RCA using Claude API with enhanced context
         rca_analysis = self._generate_rca_with_claude(
             issue_description, relevant_logs, timeline, patterns, issue_category
         )
@@ -79,11 +97,11 @@ class RCAAnalyzer:
         }
     
     def _filter_relevant_logs(self, logs_df: pd.DataFrame, issue_description: str) -> pd.DataFrame:
-        """Filter logs relevant to the issue using LSTM model and similarity"""
+        """Filter logs relevant to the issue using LSTM model, Vector DB, and similarity"""
         if logs_df.empty:
             return logs_df
         
-        # Use LSTM model if available
+        # Step 1: LSTM Filtering (existing approach)
         if self.lstm_model is not None:
             try:
                 # Prepare data for LSTM prediction
@@ -107,7 +125,32 @@ class RCAAnalyzer:
         else:
             filtered_logs = logs_df.copy()
         
-        # Additional filtering based on issue description similarity
+        # Step 2: Vector DB Similarity (NEW approach)
+        if self.vector_db and not filtered_logs.empty:
+            try:
+                # Get vector similarity scores
+                vector_similarities = self.vector_db.get_similarity_scores(
+                    filtered_logs, issue_description
+                )
+                
+                # Filter by vector similarity threshold
+                similarity_threshold = Config.VECTOR_DB_CONFIG['similarity_threshold']
+                vector_mask = np.array(vector_similarities) >= similarity_threshold
+                
+                if vector_mask.any():
+                    vector_filtered_logs = filtered_logs[vector_mask].copy()
+                    vector_filtered_logs['vector_similarity'] = np.array(vector_similarities)[vector_mask]
+                    vector_filtered_logs = vector_filtered_logs.sort_values('vector_similarity', ascending=False)
+                    
+                    logger.info(f"Vector DB filtered {len(vector_filtered_logs)} similar logs from {len(filtered_logs)}")
+                    filtered_logs = vector_filtered_logs
+                else:
+                    logger.info("No logs met vector similarity threshold, using LSTM filtered logs")
+                    
+            except Exception as e:
+                logger.warning(f"Vector DB filtering failed: {e}. Using LSTM filtered logs.")
+        
+        # Step 3: TF-IDF Similarity (fallback/combined approach)
         if not filtered_logs.empty:
             try:
                 # Vectorize issue description and log messages
@@ -127,16 +170,39 @@ class RCAAnalyzer:
                 
                 if similar_mask.any():
                     final_logs = filtered_logs[similar_mask].copy()
-                    final_logs['similarity_score'] = similarities[similar_mask]
-                    final_logs = final_logs.sort_values('similarity_score', ascending=False)
+                    final_logs['tfidf_similarity'] = similarities[similar_mask]
                     
-                    logger.info(f"Similarity filtering resulted in {len(final_logs)} relevant logs")
+                    # Combine similarity scores if vector DB was used
+                    if 'vector_similarity' in final_logs.columns:
+                        final_logs['combined_similarity'] = (
+                            final_logs['vector_similarity'] * 0.7 + 
+                            final_logs['tfidf_similarity'] * 0.3
+                        )
+                        final_logs = final_logs.sort_values('combined_similarity', ascending=False)
+                    else:
+                        final_logs = final_logs.sort_values('tfidf_similarity', ascending=False)
+                    
+                    logger.info(f"Final similarity filtering resulted in {len(final_logs)} relevant logs")
                     return final_logs.head(50)  # Limit to top 50 most relevant logs
                     
             except Exception as e:
-                logger.warning(f"Similarity filtering failed: {e}")
+                logger.warning(f"TF-IDF similarity filtering failed: {e}")
         
         return filtered_logs.head(50)
+    
+    def _get_historical_context(self, issue_description: str) -> str:
+        """Get historical context for an issue from vector database"""
+        if not self.vector_db:
+            return ""
+        
+        try:
+            historical_context = self.vector_db.get_context_for_issue(issue_description)
+            if historical_context:
+                logger.info("Retrieved historical context from vector database")
+            return historical_context
+        except Exception as e:
+            logger.warning(f"Failed to get historical context: {e}")
+            return ""
     
     def _categorize_issue(self, issue_description: str) -> str:
         """Categorize the issue based on description"""
@@ -243,14 +309,14 @@ class RCAAnalyzer:
     
     def _generate_rca_with_claude(self, issue_description: str, logs_df: pd.DataFrame, 
                                  timeline: List[Dict], patterns: Dict, issue_category: str) -> str:
-        """Generate root cause analysis using Claude API"""
+        """Generate root cause analysis using Claude API with enhanced context"""
         try:
             # Check API key first
             if not self.client.api_key:
                 logger.error("No Claude API key configured")
                 return self._generate_fallback_rca(issue_category, patterns)
             
-            # Prepare context for Claude
+            # Prepare context for Claude with historical context
             context = self._prepare_claude_context(
                 issue_description, logs_df, timeline, patterns, issue_category
             )
@@ -274,6 +340,7 @@ REQUIREMENTS:
 3. **Provide actionable technical solutions** not generic advice
 4. **Use OpenStack terminology** and reference specific services (nova-compute, nova-scheduler, etc.)
 5. **Be specific about the failure sequence** shown in the timeline
+6. **Consider historical patterns** if similar issues were found
 
 FORMAT:
 ## Root Cause Analysis
@@ -293,17 +360,15 @@ Focus on the actual log data provided, not generic OpenStack troubleshooting.
 """
             
             logger.info("Sending request to Claude API...")
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",  # Updated to latest model
+            response = self.client.generate_response(
+                prompt=prompt,
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=2000,
-                temperature=0.1,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                temperature=0.1
             )
             
             logger.info("Successfully received Claude API response")
-            return response.content[0].text
+            return response
             
         except Exception as e:
             logger.error(f"Claude API call failed: {e}")
@@ -312,13 +377,31 @@ Focus on the actual log data provided, not generic OpenStack troubleshooting.
     
     def _prepare_claude_context(self, issue_description: str, logs_df: pd.DataFrame,
                                timeline: List[Dict], patterns: Dict, issue_category: str) -> str:
-        """Prepare context for Claude API"""
+        """Prepare context for Claude API with historical context"""
         context_parts = []
+        
+        # NEW: Add historical context from vector database
+        historical_context = self._get_historical_context(issue_description)
+        if historical_context:
+            context_parts.append("## Historical Similar Issues:")
+            context_parts.append(historical_context)
+            context_parts.append("")
         
         # Add summary statistics
         context_parts.append(f"## Dataset Overview:")
         context_parts.append(f"- Total relevant log entries: {len(logs_df)}")
         context_parts.append(f"- Issue category: {issue_category}")
+        
+        # NEW: Add similarity information if available
+        if 'vector_similarity' in logs_df.columns:
+            avg_vector_sim = logs_df['vector_similarity'].mean()
+            context_parts.append(f"- Average vector similarity: {avg_vector_sim:.3f}")
+        if 'tfidf_similarity' in logs_df.columns:
+            avg_tfidf_sim = logs_df['tfidf_similarity'].mean()
+            context_parts.append(f"- Average TF-IDF similarity: {avg_tfidf_sim:.3f}")
+        if 'combined_similarity' in logs_df.columns:
+            avg_combined_sim = logs_df['combined_similarity'].mean()
+            context_parts.append(f"- Average combined similarity: {avg_combined_sim:.3f}")
         
         # Timeline summary with more detail
         if timeline:

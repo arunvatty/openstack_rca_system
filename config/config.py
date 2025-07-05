@@ -4,8 +4,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    # API Keys
+    # API Configuration
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+    GEMINI_SERVICE_ACCOUNT_PATH = os.getenv('GEMINI_SERVICE_ACCOUNT_PATH', 'gemini-service-account.json')
+    
+    # AI Provider Selection (claude or gemini)
+    AI_PROVIDER = os.getenv('AI_PROVIDER', 'claude').lower()
     
     # File paths
     DATA_DIR = 'logs'
@@ -41,6 +45,37 @@ class Config:
         'similarity_threshold': 0.7,
         'max_context_logs': 50,
         'time_window_minutes': 30
+    }
+    
+    # NEW: Vector DB Configuration
+    VECTOR_DB_CONFIG = {
+        'type': 'chroma',
+        'embedding_model': 'all-MiniLM-L6-v2',
+        'collection_name': 'openstack_logs',
+        'similarity_threshold': 0.7,
+        'top_k_results': 20,
+        'persist_directory': 'chroma_db',
+        
+        # Additional parameters for enhanced configuration
+        'chunk_size': 512,  # For text chunking if needed
+        'chunk_overlap': 50,  # Overlap between chunks
+        'embedding_dimensions': 384,  # Explicit dimension setting
+        'distance_metric': 'cosine',  # Distance metric (cosine, euclidean, etc.)
+        'max_text_length': 1000,  # Maximum text length for embedding
+    }
+    
+    # AI Model Configuration
+    AI_CONFIG = {
+        'claude': {
+            'model': 'claude-3-5-sonnet-20241022',
+            'max_tokens': 2000,
+            'temperature': 0.1
+        },
+        'gemini': {
+            'model': 'gemini-1.5-pro',
+            'max_tokens': 2000,
+            'temperature': 0.1
+        }
     }
     
     # Streamlit Configuration

@@ -332,7 +332,7 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             st.subheader("Log Timeline")
             
             # Create hourly aggregation
-            df['hour'] = pd.to_datetime(df['timestamp']).dt.floor('H')
+            df['hour'] = pd.to_datetime(df['timestamp']).dt.floor('h')
             timeline_data = df.groupby(['hour', 'level']).size().reset_index(name='count')
             
             fig = px.line(timeline_data, x='hour', y='count', color='level',

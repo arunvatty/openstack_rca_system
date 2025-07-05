@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import tf_keras as keras
+from tf_keras import layers
+from tf_keras.metrics import Precision, Recall, BinaryAccuracy
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 import joblib
@@ -25,56 +26,56 @@ class LSTMLogClassifier:
         np.random.seed(42)
     
     def build_model(self, input_shape: Tuple[int, ...]) -> keras.Model:
-        """Build LSTM model architecture"""
-        logger.info(f"Building LSTM model with input shape: {input_shape}")
+        """Build model: LSTM for sequential input, MLP for tabular/TF-IDF input"""
+        logger.info(f"Building model with input shape: {input_shape}")
         
-        model = keras.Sequential([
-            layers.Input(shape=input_shape),
-            
-            # Embedding layer (if needed)
-            layers.Dense(self.config['embedding_dim'], activation='relu'),
-            layers.Dropout(self.config['dropout_rate']),
-            
-            # LSTM layers
-            layers.LSTM(
-                self.config['lstm_units'],
-                return_sequences=True,
-                dropout=self.config['dropout_rate'],
-                recurrent_dropout=self.config['dropout_rate']
-            ),
-            layers.LSTM(
-                self.config['lstm_units'] // 2,
-                dropout=self.config['dropout_rate'],
-                recurrent_dropout=self.config['dropout_rate']
-            ),
-            
-            # Dense layers
-            layers.Dense(64, activation='relu'),
-            layers.Dropout(self.config['dropout_rate']),
-            layers.Dense(32, activation='relu'),
-            layers.Dropout(self.config['dropout_rate']),
-            
-            # Output layer
-            layers.Dense(1, activation='sigmoid')
-        ])
+        # Use functional API for better compatibility
+        inputs = keras.Input(shape=input_shape)
+        
+        if len(input_shape) == 2:
+            # Sequential input: (timesteps, features) → use LSTM
+            logger.info("Using LSTM layers for sequential input")
+            x = layers.LSTM(self.config['lstm_units'], return_sequences=True, dropout=self.config['dropout_rate'])(inputs)
+            x = layers.LSTM(self.config['lstm_units'] // 2, dropout=self.config['dropout_rate'])(x)
+            x = layers.Dense(64, activation='relu')(x)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+            x = layers.Dense(32, activation='relu')(x)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+        else:
+            # Tabular/TF-IDF input: (features,) → use MLP
+            logger.info("Using MLP layers for tabular/TF-IDF input")
+            x = layers.Dense(self.config['embedding_dim'], activation='relu')(inputs)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+            x = layers.Dense(128, activation='relu')(x)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+            x = layers.Dense(64, activation='relu')(x)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+            x = layers.Dense(32, activation='relu')(x)
+            x = layers.Dropout(self.config['dropout_rate'])(x)
+        
+        outputs = layers.Dense(1, activation='sigmoid')(x)
+        model = keras.Model(inputs=inputs, outputs=outputs)
         
         # Compile model
         model.compile(
             optimizer='adam',
             loss='binary_crossentropy',
-            metrics=['accuracy', 'precision', 'recall']
+            metrics=[keras.metrics.BinaryAccuracy(), keras.metrics.Precision(), keras.metrics.Recall()]
         )
         
-        logger.info("LSTM model built successfully")
+        logger.info("Model built successfully (LSTM for sequence, MLP for tabular)")
         return model
     
     def train(self, X: np.ndarray, y: np.ndarray) -> dict:
         """Train the LSTM model"""
         logger.info("Starting LSTM model training...")
+        logger.info(f"Input data shape: {X.shape}")
         
-        # Reshape data for LSTM if needed
-        if len(X.shape) == 2:
-            X = X.reshape(X.shape[0], 1, X.shape[1])
+        # Ensure data is 2D for tabular features
+        if len(X.shape) == 3:
+            # If somehow we have 3D data, flatten the last two dimensions
+            X = X.reshape(X.shape[0], -1)
+            logger.info(f"Reshaped input data to: {X.shape}")
         
         # Split data
         X_train, X_val, y_train, y_val = train_test_split(
@@ -114,12 +115,12 @@ class LSTMLogClassifier:
         )
         
         # Evaluate model
-        train_loss, train_acc, train_prec, train_rec = self.model.evaluate(
-            X_train, y_train, verbose=0
-        )
-        val_loss, val_acc, val_prec, val_rec = self.model.evaluate(
-            X_val, y_val, verbose=0
-        )
+        train_metrics = self.model.evaluate(X_train, y_train, verbose=0)
+        val_metrics = self.model.evaluate(X_val, y_val, verbose=0)
+        
+        # Extract metrics (loss, accuracy, precision, recall)
+        train_loss, train_acc, train_prec, train_rec = train_metrics
+        val_loss, val_acc, val_prec, val_rec = val_metrics
         
         # Generate predictions for detailed metrics
         y_pred = (self.model.predict(X_val) > 0.5).astype(int).flatten()
@@ -146,9 +147,9 @@ class LSTMLogClassifier:
         if self.model is None:
             raise ValueError("Model not trained yet. Call train() first.")
         
-        # Reshape data for LSTM if needed
-        if len(X.shape) == 2:
-            X = X.reshape(X.shape[0], 1, X.shape[1])
+        # Ensure data is 2D for tabular features
+        if len(X.shape) == 3:
+            X = X.reshape(X.shape[0], -1)
         
         predictions = self.model.predict(X)
         return predictions.flatten()
@@ -162,29 +163,30 @@ class LSTMLogClassifier:
         """Save trained model"""
         if self.model is None:
             raise ValueError("No model to save. Train the model first.")
-        
-        self.model.save(filepath)
-        
+        # Always use .keras extension
+        if not filepath.endswith('.keras'):
+            filepath = filepath.rsplit('.', 1)[0] + '.keras'
+        self.model.save(filepath, save_format='keras')
         # Save config and preprocessing info
         model_info = {
             'config': self.config,
             'input_shape': self.model.input_shape[1:]
         }
-        joblib.dump(model_info, filepath.replace('.h5', '_info.pkl'))
-        
+        joblib.dump(model_info, filepath.replace('.keras', '_info.pkl'))
         logger.info(f"Model saved to {filepath}")
     
     def load_model(self, filepath: str):
         """Load trained model"""
+        # Always use .keras extension
+        if not filepath.endswith('.keras'):
+            filepath = filepath.rsplit('.', 1)[0] + '.keras'
         self.model = keras.models.load_model(filepath)
-        
         # Load config and preprocessing info
         try:
-            model_info = joblib.load(filepath.replace('.h5', '_info.pkl'))
+            model_info = joblib.load(filepath.replace('.keras', '_info.pkl'))
             self.config = model_info['config']
         except FileNotFoundError:
             logger.warning("Model info file not found. Using default config.")
-        
         logger.info(f"Model loaded from {filepath}")
     
     def get_feature_importance(self, X: np.ndarray, feature_names: Optional[list] = None) -> dict:
@@ -192,9 +194,9 @@ class LSTMLogClassifier:
         if self.model is None:
             raise ValueError("Model not trained yet.")
         
-        # Reshape data for LSTM if needed
-        if len(X.shape) == 2:
-            X = X.reshape(X.shape[0], 1, X.shape[1])
+        # Ensure data is 2D for tabular features
+        if len(X.shape) == 3:
+            X = X.reshape(X.shape[0], -1)
         
         baseline_predictions = self.predict(X)
         baseline_score = np.mean(baseline_predictions)
@@ -204,7 +206,7 @@ class LSTMLogClassifier:
         for i in range(X.shape[-1]):
             # Create permuted version
             X_permuted = X.copy()
-            np.random.shuffle(X_permuted[:, :, i])
+            np.random.shuffle(X_permuted[:, i])
             
             # Get predictions with permuted feature
             permuted_predictions = self.predict(X_permuted)

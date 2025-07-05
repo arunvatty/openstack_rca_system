@@ -39,30 +39,43 @@ def setup_directories():
         Path(directory).mkdir(parents=True, exist_ok=True)
         logger.info(f"Created directory: {directory}")
 
-def train_model_pipeline(log_files_path: str = None):
-    """Complete pipeline for training LSTM model"""
+def train_model_pipeline(log_files_path: str = None, clean_vector_db: bool = False):
+    """Train the LSTM model pipeline with optional ChromaDB cleanup"""
     logger.info("Starting model training pipeline...")
     
-    # Initialize components
+    # Step 1: Initialize components
     ingestion_manager = LogIngestionManager(Config.DATA_DIR)
     preprocessor = LogPreprocessor()
     feature_engineer = FeatureEngineer()
     
-    # Step 1: Ingest log files
+    # NEW: Clean ChromaDB if requested
+    if clean_vector_db:
+        logger.info("Cleaning ChromaDB before training...")
+        try:
+            from services.vector_db_service import VectorDBService
+            vector_db = VectorDBService()
+            vector_db.clear_collection()
+            logger.info("✅ ChromaDB cleaned successfully")
+            
+            # Reinitialize the ingestion manager to get fresh vector DB connection
+            ingestion_manager = LogIngestionManager(Config.DATA_DIR)
+            logger.info("✅ Reinitialized ingestion manager with clean ChromaDB")
+            
+        except Exception as e:
+            logger.warning(f"Failed to clean ChromaDB: {e}")
+    
+    # Step 2: Ingest and preprocess data
+    logger.info("Ingesting log data...")
     if log_files_path:
-        logger.info(f"Ingesting logs from: {log_files_path}")
         df = ingestion_manager.ingest_from_directory(log_files_path)
     else:
-        logger.info("Ingesting logs from default directory...")
         df = ingestion_manager.ingest_multiple_files()
     
     if df.empty:
-        logger.error("No log data found. Please check log files path.")
+        logger.error("No log data found for training")
         return None
     
-    logger.info(f"Ingested {len(df)} log entries")
-    
-    # Step 2: Feature engineering
+    # Apply feature engineering
     logger.info("Applying feature engineering...")
     df = feature_engineer.engineer_all_features(df)
     
@@ -76,7 +89,7 @@ def train_model_pipeline(log_files_path: str = None):
     results = lstm_classifier.train(X, y)
     
     # Step 5: Save model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.h5')
+    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
     lstm_classifier.save_model(model_path)
     logger.info(f"Model saved to: {model_path}")
     
@@ -85,6 +98,15 @@ def train_model_pipeline(log_files_path: str = None):
     logger.info(f"Validation Accuracy: {results['val_accuracy']:.4f}")
     logger.info(f"Validation Precision: {results['val_precision']:.4f}")
     logger.info(f"Validation Recall: {results['val_recall']:.4f}")
+    
+    # NEW: Print ChromaDB status
+    try:
+        from services.vector_db_service import VectorDBService
+        vector_db = VectorDBService()
+        stats = vector_db.get_collection_stats()
+        logger.info(f"ChromaDB Status: {stats['total_documents']} documents")
+    except Exception as e:
+        logger.warning(f"Could not get ChromaDB stats: {e}")
     
     return lstm_classifier
 
@@ -102,7 +124,7 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None):
     feature_engineer = FeatureEngineer()
     
     # Load or train LSTM model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.h5')
+    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
     lstm_model = None
     
     if os.path.exists(model_path):
@@ -178,13 +200,17 @@ def setup_openstack_log():
 def main():
     """Main CLI interface"""
     parser = argparse.ArgumentParser(description='OpenStack RCA System')
-    parser.add_argument('--mode', choices=['train', 'analyze', 'streamlit', 'setup'], 
+    parser.add_argument('--mode', choices=['train', 'analyze', 'streamlit', 'setup', 'vector-db'], 
                        default='streamlit', help='Operation mode')
     parser.add_argument('--logs', type=str, help='Path to log files directory')
     parser.add_argument('--issue', type=str, 
                        help='Issue description for RCA analysis')
     parser.add_argument('--api-key', type=str, 
                        help='Anthropic API key (or set ANTHROPIC_API_KEY env var)')
+    parser.add_argument('--clean-vector-db', action='store_true',
+                       help='Clean ChromaDB before training (removes all existing data)')
+    parser.add_argument('--vector-db-action', choices=['status', 'clean', 'reset'],
+                       help='Vector DB action (for vector-db mode)')
     
     args = parser.parse_args()
     
@@ -203,6 +229,47 @@ def main():
             logger.info("You can now run: python main.py --mode train --logs logs")
         else:
             logger.error("Setup failed. Please place OpenStack_2k.log in the project directory.")
+    
+    elif args.mode == 'vector-db':
+        logger.info("Vector Database Management Mode")
+        
+        try:
+            from services.vector_db_service import VectorDBService
+            vector_db = VectorDBService()
+            
+            if args.vector_db_action == 'status':
+                stats = vector_db.get_collection_stats()
+                print("\n" + "="*50)
+                print("CHROMADB STATUS")
+                print("="*50)
+                print(f"Collection Name: {stats.get('collection_name', 'N/A')}")
+                print(f"Total Documents: {stats.get('total_documents', 0)}")
+                print(f"Chunked Documents: {stats.get('chunked_documents', 0)}")
+                print(f"Non-chunked Documents: {stats.get('non_chunked_documents', 0)}")
+                print(f"Embedding Model: {stats.get('embedding_model', 'N/A')}")
+                print(f"Embedding Dimensions: {stats.get('embedding_dimensions', 'N/A')}")
+                print(f"Distance Metric: {stats.get('distance_metric', 'N/A')}")
+                print("="*50)
+                
+            elif args.vector_db_action == 'clean':
+                logger.info("Cleaning ChromaDB collection...")
+                vector_db.clear_collection()
+                logger.info("✅ ChromaDB collection cleaned successfully")
+                
+            elif args.vector_db_action == 'reset':
+                logger.info("Resetting ChromaDB database...")
+                vector_db._reset_chroma_db()
+                logger.info("✅ ChromaDB database reset successfully")
+                
+            else:
+                logger.error("Please specify --vector-db-action: status, clean, or reset")
+                logger.info("Examples:")
+                logger.info("  python main.py --mode vector-db --vector-db-action status")
+                logger.info("  python main.py --mode vector-db --vector-db-action clean")
+                logger.info("  python main.py --mode vector-db --vector-db-action reset")
+                
+        except Exception as e:
+            logger.error(f"Vector DB operation failed: {e}")
         
     elif args.mode == 'train':
         logger.info("Starting model training...")
@@ -216,7 +283,13 @@ def main():
                 logger.error("No log files found. Please run: python main.py --mode setup")
                 return
         
-        model = train_model_pipeline(args.logs)
+        # NEW: Show ChromaDB cleanup status
+        if args.clean_vector_db:
+            logger.info("🔄 ChromaDB will be cleaned before training")
+        else:
+            logger.info("📊 ChromaDB will retain existing data (use --clean-vector-db to reset)")
+        
+        model = train_model_pipeline(args.logs, clean_vector_db=args.clean_vector_db)
         if model:
             logger.info("Model training completed successfully!")
         else:

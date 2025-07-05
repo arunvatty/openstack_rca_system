@@ -36,6 +36,48 @@ An intelligent Root Cause Analysis system for OpenStack environments using LSTM 
                        └─────────────────┘    └─────────────────┘
 ```
 
+---
+
+## 🧩 NEW: LSTM + RAG (ChromaDB) Hybrid Workflow
+
+**The RCA system now combines deep learning (LSTM) with Retrieval-Augmented Generation (RAG) using a vector database (ChromaDB) for advanced log analysis and context retrieval.**
+
+### 🔗 Updated Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌────────────────────┐    ┌─────────────────┐
+│   Log Files     │───▶│  LSTM Model     │───▶│  Vector DB (RAG)   │───▶│  Claude AI      │
+│                 │    │                 │    │  (ChromaDB +      │    │                 │
+│                 │    │ • Importance    │    │   Embeddings)     │    │ • RCA Reports   │
+│                 │    │   Scoring       │    │ • Semantic Search │    │                 │
+└─────────────────┘    └─────────────────┘    └────────────────────┘    └─────────────────┘
+```
+
+- **LSTM**: Filters important logs based on learned patterns
+- **ChromaDB (RAG)**: Stores log embeddings, enables semantic similarity search, and retrieves historical context
+- **Claude AI**: Generates detailed RCA using both current and historical log evidence
+
+### 🛠️ How the Hybrid Pipeline Works
+
+1. **Log Ingestion**: All logs are parsed and stored. Embeddings are generated and stored in ChromaDB.
+2. **LSTM Filtering**: The LSTM model scores log importance, filtering out noise.
+3. **Vector Similarity (RAG)**: For a given issue, the system retrieves logs with high semantic similarity from ChromaDB, using embeddings (e.g., MiniLM).
+4. **Combined Filtering**: Logs are ranked by a combination of LSTM importance, vector similarity, and TF-IDF similarity.
+5. **Pattern & Timeline Analysis**: Extracts error patterns, service activity, and event timelines from the filtered logs.
+6. **Historical Context**: The system retrieves similar past issues from ChromaDB to provide additional context to the LLM.
+7. **Claude AI Analysis**: The LLM receives both current and historical context, producing a more accurate and actionable RCA report.
+
+### 🚦 Example Hybrid Analysis Pipeline
+
+1. **Issue Categorization** → Identifies issue type (resource_shortage, network_issues, etc.)
+2. **LSTM Filtering** → Identifies important logs using trained model
+3. **Vector DB Similarity (ChromaDB)** → Finds semantically relevant logs and retrieves historical context
+4. **Pattern Analysis** → Extracts error patterns and timeline
+5. **Claude AI Analysis** → Generates detailed RCA report using both current and historical evidence
+6. **Recommendations** → Provides actionable solutions
+
+---
+
 ## 🛠️ Installation
 
 ### Prerequisites
@@ -99,19 +141,21 @@ python main.py --mode train --logs logs/
 4. **LSTM Training** → Trains neural network on log patterns
 5. **Model Persistence** → Saves trained model to `saved_models/`
 
-### Phase 3: Root Cause Analysis
+### Phase 3: Root Cause Analysis (Enhanced with RAG)
 ```bash
-# Analyze specific issue
+# Analyze specific issue with LSTM + RAG workflow
 python main.py --mode analyze --issue "Instance launch failures" --logs logs/
 ```
 
-**Analysis Pipeline:**
+**Enhanced Analysis Pipeline:**
 1. **Issue Categorization** → Identifies issue type (resource_shortage, network_issues, etc.)
 2. **LSTM Filtering** → Identifies important logs using trained model
-3. **Cosine Similarity** → Finds semantically relevant logs
-4. **Pattern Analysis** → Extracts error patterns and timeline
-5. **Claude AI Analysis** → Generates detailed RCA report
-6. **Recommendations** → Provides actionable solutions
+3. **Vector DB Similarity (RAG)** → Finds semantically relevant logs using ChromaDB embeddings
+4. **Historical Context Retrieval** → Retrieves similar past issues from vector database
+5. **Combined Similarity Scoring** → Ranks logs by LSTM importance + vector similarity + TF-IDF
+6. **Pattern Analysis** → Extracts error patterns and timeline
+7. **Claude AI Analysis** → Generates detailed RCA report using current + historical evidence
+8. **Recommendations** → Provides actionable solutions
 
 ### Phase 4: Web Interface
 ```bash
@@ -121,7 +165,7 @@ python main.py --mode streamlit
 
 ## 🧠 How It Works
 
-### Two-Stage Intelligent Filtering
+### Three-Stage Intelligent Filtering (Enhanced)
 
 #### Stage 1: LSTM Importance Filtering
 ```python
@@ -133,7 +177,25 @@ threshold = np.percentile(importance_scores, 30)
 important_logs = logs_df[importance_scores >= threshold]
 ```
 
-#### Stage 2: Cosine Similarity Filtering
+#### Stage 2: Vector DB Similarity (RAG)
+```python
+# Generate embeddings for issue description and logs
+issue_embedding = self.vector_db._generate_embeddings([issue_description])[0]
+log_embeddings = self.vector_db._generate_embeddings(log_texts)
+
+# Calculate semantic similarity using ChromaDB
+vector_similarities = []
+for log_emb in log_embeddings:
+    similarity = self._cosine_similarity(issue_embedding, log_emb)
+    vector_similarities.append(similarity)
+
+# Filter by vector similarity threshold
+similarity_threshold = 0.7
+vector_mask = np.array(vector_similarities) >= similarity_threshold
+vector_filtered_logs = important_logs[vector_mask]
+```
+
+#### Stage 3: TF-IDF Similarity (Fallback/Combined)
 ```python
 # Vectorize issue description and log messages
 all_texts = [issue_description] + messages
@@ -143,17 +205,31 @@ tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
 similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
 # [0.8, 0.2, 0.1, 0.7, ...]
 
-# Filter and sort by relevance
-final_logs = important_logs[similarities >= 0.1]
-final_logs = final_logs.sort_values('similarity_score', ascending=False).head(50)
+# Combine similarity scores if vector DB was used
+if 'vector_similarity' in final_logs.columns:
+    final_logs['combined_similarity'] = (
+        final_logs['vector_similarity'] * 0.7 + 
+        final_logs['tfidf_similarity'] * 0.3
+    )
+    final_logs = final_logs.sort_values('combined_similarity', ascending=False)
+else:
+    final_logs = final_logs.sort_values('tfidf_similarity', ascending=False)
 ```
 
-### Context Building for LLM
+### Enhanced Context Building for LLM (with Historical Context)
 ```python
+# Get historical context from vector database
+historical_context = self.vector_db.get_context_for_issue(issue_description)
+
 context = f"""
+## Historical Similar Issues:
+{historical_context}
+
 ## Dataset Overview:
 - Total relevant log entries: {len(logs_df)}
 - Issue category: {issue_category}
+- Average vector similarity: {avg_vector_sim:.3f}
+- Average combined similarity: {avg_combined_sim:.3f}
 
 ## Timeline of Critical Events:
 - {timestamp}: {event_type} ({service})
@@ -173,7 +249,7 @@ context = f"""
 """
 ```
 
-### Claude AI Analysis
+### Enhanced Claude AI Analysis (with RAG Context)
 ```python
 prompt = f"""
 You are an expert OpenStack systems administrator performing root cause analysis.
@@ -193,6 +269,8 @@ REQUIREMENTS:
 3. Provide actionable technical solutions
 4. Use OpenStack terminology
 5. Be specific about failure sequence shown in timeline
+6. Consider historical patterns if similar issues were found
+7. Reference similarity scores to indicate confidence in analysis
 """
 ```
 
@@ -420,6 +498,64 @@ python test_rca.py
 - Train the model first: `python main.py --mode train --logs logs/`
 - Check if model file exists in `saved_models/` directory
 
+### NEW: LSTM + RAG (ChromaDB) Issues
+
+**"ValueError: Your currently installed version of Keras is Keras 3, but this is not yet supported in Transformers"**
+- This is a compatibility issue between Keras 3 and sentence-transformers
+- Fix: `pip install tf-keras` (already included in requirements.txt)
+- Alternative: Use the updated requirements.txt which pins keras<3.0.0
+
+**"ImportError: cannot import name 'cached_download' from 'huggingface_hub'"**
+- Version mismatch between sentence-transformers and huggingface_hub
+- Fix: `pip install "huggingface_hub==0.15.1"` (already included in requirements.txt)
+
+**"AttributeError: `np.float_` was removed in the NumPy 2.0 release"**
+- ChromaDB compatibility issue with NumPy 2.0
+- Fix: `pip install "numpy<2.0"` (already included in requirements.txt)
+
+**"Vector database not available"**
+- Ensure ChromaDB is installed: `pip install chromadb==0.4.22`
+- Check if the `chroma_db` directory is created in your project root
+- Verify sentence-transformers is installed: `pip install sentence-transformers==2.2.2`
+
+**"No historical context found"**
+- This is normal for the first run - ChromaDB needs to be populated with logs
+- Run log ingestion first: `python main.py --mode analyze --logs logs/`
+- Historical context will be available after the first analysis
+
+### GPU/CUDA Issues
+
+**"CUDA driver version is insufficient for CUDA runtime version"**
+- This occurs when TensorFlow/Keras tries to use GPU but CUDA versions don't match
+- **Quick Fix**: Force CPU-only mode:
+  ```bash
+  export CUDA_VISIBLE_DEVICES=""
+  python main.py --mode analyze --issue "Instance launch failures" --logs logs/
+  ```
+- **Permanent Fix**: Update CUDA driver or use CPU-only TensorFlow:
+  ```bash
+  pip uninstall tensorflow
+  pip install tensorflow-cpu
+  ```
+
+**"GPU memory allocation failed"**
+- LSTM model or vector embeddings are too large for GPU memory
+- **Fix**: Use CPU mode or reduce batch size in config:
+  ```python
+  LSTM_CONFIG = {
+      'batch_size': 16,  # Reduce from 32
+      # ... other settings
+  }
+  ```
+
+**"CUDA out of memory"**
+- Similar to above, but specifically for GPU memory exhaustion
+- **Fix**: Set environment variable to limit GPU memory growth:
+  ```bash
+  export TF_FORCE_GPU_ALLOW_GROWTH=true
+  python main.py --mode train --logs logs/
+  ```
+
 ### Getting Help
 
 1. Run the diagnostic test: `python test_rca.py`
@@ -473,12 +609,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### 2. Intelligent Filtering
 - **LSTM**: Identifies important vs. unimportant logs
-- **Cosine Similarity**: Finds semantically relevant logs
-- **Result**: Focus on most relevant information
+- **Vector DB (RAG)**: Finds semantically relevant logs using embeddings
+- **Combined Approach**: Focus on most relevant information with historical context
 
 ### 3. Expert-Level Analysis
 - **Claude AI**: Provides detailed technical RCA
-- **Context-Aware**: Uses actual log evidence
+- **Context-Aware**: Uses actual log evidence + historical patterns
 - **Actionable**: Specific recommendations provided
 
 ### 4. User-Friendly Interface
