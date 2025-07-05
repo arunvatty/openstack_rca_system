@@ -10,6 +10,10 @@ import re
 
 from config.config import Config
 
+# Disable ChromaDB telemetry to prevent errors
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+
 logger = logging.getLogger(__name__)
 
 class VectorDBService:

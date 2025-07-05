@@ -9,6 +9,10 @@ import argparse
 import logging
 from pathlib import Path
 
+# Disable ChromaDB telemetry to prevent errors
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+
 # Add project root to Python path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -110,7 +114,7 @@ def train_model_pipeline(log_files_path: str = None, clean_vector_db: bool = Fal
     
     return lstm_classifier
 
-def run_rca_analysis(issue_description: str, log_files_path: str = None):
+def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mode: bool = False):
     """Run RCA analysis on a specific issue"""
     logger.info("Starting RCA analysis...")
     
@@ -153,7 +157,7 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None):
     
     # Perform RCA analysis
     logger.info(f"Analyzing issue: {issue_description}")
-    results = rca_analyzer.analyze_issue(issue_description, df)
+    results = rca_analyzer.analyze_issue(issue_description, df, fast_mode=fast_mode)
     
     # Display results
     print("\n" + "="*50)
@@ -162,6 +166,7 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None):
     print(f"Issue: {issue_description}")
     print(f"Category: {results['issue_category']}")
     print(f"Relevant Logs: {results['relevant_logs_count']}")
+    print(f"Analysis Mode: {results['analysis_mode']}")
     print("\n" + results['root_cause_analysis'])
     
     if results['recommendations']:
@@ -211,6 +216,8 @@ def main():
                        help='Clean ChromaDB before training (removes all existing data)')
     parser.add_argument('--vector-db-action', choices=['status', 'clean', 'reset'],
                        help='Vector DB action (for vector-db mode)')
+    parser.add_argument('--fast-mode', action='store_true',
+                       help='Use fast mode for analysis (skips vector DB for speed)')
     
     args = parser.parse_args()
     
@@ -311,7 +318,7 @@ def main():
                 logger.error("No log files found. Please run: python main.py --mode setup")
                 return
         
-        results = run_rca_analysis(args.issue, args.logs)
+        results = run_rca_analysis(args.issue, args.logs, args.fast_mode)
         if results:
             logger.info("RCA analysis completed successfully!")
         else:

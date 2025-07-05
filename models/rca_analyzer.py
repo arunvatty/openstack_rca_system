@@ -65,12 +65,16 @@ class RCAAnalyzer:
             ]
         }
     
-    def analyze_issue(self, issue_description: str, logs_df: pd.DataFrame) -> Dict:
+    def analyze_issue(self, issue_description: str, logs_df: pd.DataFrame, fast_mode: bool = False) -> Dict:
         """Analyze an issue and provide root cause analysis"""
         logger.info(f"Analyzing issue: {issue_description}")
         
         # Step 1: Filter relevant logs using LSTM predictions and Vector DB
-        relevant_logs = self._filter_relevant_logs(logs_df, issue_description)
+        if fast_mode:
+            logger.info("Using fast mode: skipping vector DB for speed")
+            relevant_logs = self._filter_relevant_logs_fast(logs_df, issue_description)
+        else:
+            relevant_logs = self._filter_relevant_logs(logs_df, issue_description)
         
         # Step 2: Identify issue category
         issue_category = self._categorize_issue(issue_description)
@@ -93,7 +97,8 @@ class RCAAnalyzer:
             'timeline': timeline,
             'patterns': patterns,
             'root_cause_analysis': rca_analysis,
-            'recommendations': self._generate_recommendations(issue_category, patterns)
+            'recommendations': self._generate_recommendations(issue_category, patterns),
+            'analysis_mode': 'fast' if fast_mode else 'full'
         }
     
     def _filter_relevant_logs(self, logs_df: pd.DataFrame, issue_description: str) -> pd.DataFrame:
@@ -189,6 +194,66 @@ class RCAAnalyzer:
                 logger.warning(f"TF-IDF similarity filtering failed: {e}")
         
         return filtered_logs.head(50)
+    
+    def _filter_relevant_logs_fast(self, logs_df: pd.DataFrame, issue_description: str) -> pd.DataFrame:
+        """Fast filtering using only LSTM and TF-IDF (no vector DB)"""
+        if logs_df.empty:
+            return logs_df
+        
+        # Step 1: LSTM Filtering
+        if self.lstm_model is not None:
+            try:
+                from data.preprocessing import LogPreprocessor
+                preprocessor = LogPreprocessor()
+                X, _ = preprocessor.prepare_lstm_data(logs_df)
+                
+                importance_scores = self.lstm_model.predict(X)
+                threshold = np.percentile(importance_scores, 30)
+                important_mask = importance_scores >= threshold
+                
+                filtered_logs = logs_df[important_mask].copy()
+                logger.info(f"LSTM filtered {len(filtered_logs)} important logs from {len(logs_df)}")
+                
+            except Exception as e:
+                logger.warning(f"LSTM filtering failed: {e}. Using all logs.")
+                filtered_logs = logs_df.copy()
+        else:
+            filtered_logs = logs_df.copy()
+        
+        # Step 2: TF-IDF Similarity (fast)
+        try:
+            # Prepare texts for TF-IDF
+            texts = filtered_logs['message'].fillna('').astype(str).tolist()
+            
+            # Fit TF-IDF if not already fitted
+            if not hasattr(self.tfidf_vectorizer, 'vocabulary_'):
+                self.tfidf_vectorizer.fit(texts)
+            
+            # Transform query and logs
+            query_vector = self.tfidf_vectorizer.transform([issue_description])
+            log_vectors = self.tfidf_vectorizer.transform(texts)
+            
+            # Calculate similarities
+            similarities = cosine_similarity(query_vector, log_vectors).flatten()
+            
+            # Filter by similarity threshold
+            similarity_threshold = 0.1  # Lower threshold for TF-IDF
+            tfidf_mask = similarities >= similarity_threshold
+            
+            if tfidf_mask.any():
+                tfidf_filtered_logs = filtered_logs[tfidf_mask].copy()
+                tfidf_filtered_logs['tfidf_similarity'] = similarities[tfidf_mask]
+                tfidf_filtered_logs = tfidf_filtered_logs.sort_values('tfidf_similarity', ascending=False)
+                
+                logger.info(f"TF-IDF filtered {len(tfidf_filtered_logs)} similar logs from {len(filtered_logs)}")
+                filtered_logs = tfidf_filtered_logs
+            else:
+                logger.info("No logs met TF-IDF similarity threshold, using LSTM filtered logs")
+                
+        except Exception as e:
+            logger.warning(f"TF-IDF filtering failed: {e}. Using LSTM filtered logs.")
+        
+        return filtered_logs
     
     def _get_historical_context(self, issue_description: str) -> str:
         """Get historical context for an issue from vector database"""

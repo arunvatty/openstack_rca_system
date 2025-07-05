@@ -357,8 +357,21 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             height=100
         )
         
+        # Fast mode option
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            fast_mode = st.checkbox(
+                "🚀 Fast Mode", 
+                value=False,
+                help="Enable fast mode for quicker analysis (skips vector database, uses LSTM + TF-IDF only)"
+            )
+        
+        with col2:
+            if fast_mode:
+                st.info("⚡ Fast Mode Enabled")
+        
         if st.button("🔍 Analyze Issue") and issue_description:
-            self.perform_rca_analysis(issue_description)
+            self.perform_rca_analysis(issue_description, fast_mode)
         
         # Display chat history
         if st.session_state.chat_history:
@@ -367,20 +380,22 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                 with st.expander(f"Analysis {i+1}: {chat['issue'][:50]}...", expanded=(i == len(st.session_state.chat_history)-1)):
                     self.display_rca_results(chat['results'])
     
-    def perform_rca_analysis(self, issue_description):
+    def perform_rca_analysis(self, issue_description, fast_mode=False):
         """Perform RCA analysis on the described issue"""
         with st.spinner("Analyzing logs and generating root cause analysis..."):
             try:
                 results = st.session_state.rca_analyzer.analyze_issue(
                     issue_description, 
-                    st.session_state.logs_df
+                    st.session_state.logs_df,
+                    fast_mode=fast_mode
                 )
                 
                 # Add to chat history
                 st.session_state.chat_history.append({
                     'timestamp': datetime.now(),
                     'issue': issue_description,
-                    'results': results
+                    'results': results,
+                    'fast_mode': fast_mode
                 })
                 
                 st.success("✅ Analysis complete!")
@@ -394,6 +409,13 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
         # Issue summary
         st.write(f"**Issue Category:** {results.get('issue_category', 'Unknown')}")
         st.write(f"**Relevant Logs:** {results.get('relevant_logs_count', 0)}")
+        
+        # Analysis mode indicator
+        analysis_mode = results.get('analysis_mode', 'full')
+        if analysis_mode == 'fast':
+            st.info("⚡ Analysis performed in Fast Mode (LSTM + TF-IDF only)")
+        else:
+            st.info("🔍 Analysis performed in Full Mode (LSTM + Vector DB + TF-IDF)")
         
         # Root cause analysis
         if 'root_cause_analysis' in results:
