@@ -277,7 +277,7 @@ def main():
                 
         except Exception as e:
             logger.error(f"Vector DB operation failed: {e}")
-        
+    
     elif args.mode == 'train':
         logger.info("Starting model training...")
         
@@ -303,11 +303,11 @@ def main():
             logger.error("Model training failed!")
     
     elif args.mode == 'analyze':
+        logger.info("Starting RCA analysis...")
+        
         if not args.issue:
             logger.error("Please provide an issue description with --issue")
             return
-        
-        logger.info("Starting RCA analysis...")
         
         # If no logs path specified, try to use the OpenStack_2k.log
         if not args.logs:
@@ -342,6 +342,10 @@ def main():
         except Exception as e:
             logger.error(f"Failed to start Streamlit app: {e}")
             logger.info("Please run manually: streamlit run streamlit_app/chatbot.py")
+    
+    else:
+        logger.error(f"Unknown mode: {args.mode}")
+        parser.print_help()
 
 if __name__ == "__main__":
     main()
