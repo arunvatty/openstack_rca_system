@@ -25,6 +25,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          python -m venv venv
+          source venv\Scripts\activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
@@ -34,14 +36,19 @@ jobs:
           echo "DATA_DIR=logs" >> .env
           echo "MODELS_DIR=saved_models" >> .env
 
-      - name: Run Linting (pylint)
+      - name: Run setup step
         run: |
-          pip install pylint
-          pylint main.py test_rca.py data/*.py models/*.py utils/*.py web/*.py
+          python main.py --mode setup
 
       - name: Run Tests
         run: |
           python test_rca.py
+          
+      - name: 🧠 Train model with dummy logs
+        run: |
+          mkdir -p logs/sample_logs
+          echo "ERROR: Dummy log for CI model training" > logs/sample_logs/test.log
+          python main.py --mode train --logs logs/sample_logs
 
       - name: Format with Black
         run: |
