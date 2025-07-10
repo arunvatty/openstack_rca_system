@@ -1,0 +1,51 @@
+name: RCA App CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set up .env file
+        run: |
+          echo "ANTHROPIC_API_KEY=dummy_key_for_ci" > .env
+          echo "DATA_DIR=logs" >> .env
+          echo "MODELS_DIR=saved_models" >> .env
+
+      - name: Run Linting (pylint)
+        run: |
+          pip install pylint
+          pylint main.py data/ models/ utils/ web/
+
+      - name: Run Tests
+        run: |
+          python test_rca.py
+
+      - name: Format with Black
+        run: |
+          pip install black
+          black --check .
