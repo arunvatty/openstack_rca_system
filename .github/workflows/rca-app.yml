@@ -32,7 +32,7 @@ jobs:
 
       - name: Set up .env file
         run: |
-          echo "ANTHROPIC_API_KEY=dummy_key_for_ci" > .env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" > .env
           echo "DATA_DIR=logs" >> .env
           echo "MODELS_DIR=saved_models" >> .env
 
