@@ -34,12 +34,14 @@ class RCAAnalyzer:
         )
         
         # NEW: Initialize vector database service
+        self.vector_db = None  # Always initialize the attribute
         if VECTOR_DB_AVAILABLE:
             try:
                 self.vector_db = VectorDBService()
                 logger.info("VectorDBService initialized for RCA analysis")
             except Exception as e:
                 logger.warning(f"Failed to initialize VectorDBService: {e}")
+                self.vector_db = None
         
         # Common OpenStack issue patterns
         self.issue_patterns = {

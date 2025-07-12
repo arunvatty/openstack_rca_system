@@ -115,17 +115,17 @@ def train_model_pipeline(log_files_path: str = None, clean_vector_db: bool = Fal
     return lstm_classifier
 
 def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mode: bool = False):
-    """Run RCA analysis on a specific issue"""
-    logger.info("Starting RCA analysis...")
+    """Run RCA analysis on a specific issue using Hybrid RCA Analyzer"""
+    logger.info("Starting hybrid RCA analysis...")
     
     # Check for API key
     if not Config.ANTHROPIC_API_KEY:
         logger.error("Anthropic API key not found. Please set ANTHROPIC_API_KEY environment variable.")
         return
     
-    # Initialize components
-    ingestion_manager = LogIngestionManager(Config.DATA_DIR)
-    feature_engineer = FeatureEngineer()
+    # Initialize log cache
+    from utils.log_cache import LogCache
+    log_cache = LogCache()
     
     # Load or train LSTM model
     model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
@@ -139,40 +139,57 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mo
         logger.warning("No trained model found. Training new model...")
         lstm_model = train_model_pipeline(log_files_path)
     
-    # Initialize RCA analyzer
-    rca_analyzer = RCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
+    # Initialize Hybrid RCA analyzer
+    from models.hybrid_rca_analyzer import HybridRCAAnalyzer
+    rca_analyzer = HybridRCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
     
-    # Ingest logs
+    # Get cached logs or load from files
     if log_files_path:
-        df = ingestion_manager.ingest_from_directory(log_files_path)
+        logs_df = log_cache.get_cached_logs(log_files_path)
     else:
-        df = ingestion_manager.ingest_multiple_files()
+        logs_df = log_cache.get_cached_logs(Config.DATA_DIR)
     
-    if df.empty:
+    if logs_df.empty:
         logger.error("No log data found for analysis.")
         return
     
-    # Apply feature engineering
-    df = feature_engineer.engineer_all_features(df)
-    
     # Perform RCA analysis
     logger.info(f"Analyzing issue: {issue_description}")
-    results = rca_analyzer.analyze_issue(issue_description, df, fast_mode=fast_mode)
+    results = rca_analyzer.analyze_issue(issue_description, logs_df, fast_mode=fast_mode)
     
     # Display results
     print("\n" + "="*50)
-    print("ROOT CAUSE ANALYSIS RESULTS")
+    print("HYBRID RCA ANALYSIS RESULTS")
     print("="*50)
     print(f"Issue: {issue_description}")
     print(f"Category: {results['issue_category']}")
     print(f"Relevant Logs: {results['relevant_logs_count']}")
     print(f"Analysis Mode: {results['analysis_mode']}")
+    
+    # Display performance metrics
+    if 'performance_metrics' in results:
+        metrics = results['performance_metrics']
+        print(f"\nPerformance Metrics:")
+        print(f"- Processing Time: {metrics.get('processing_time', 0):.2f} seconds")
+        print(f"- Total Logs: {metrics.get('total_logs', 0)}")
+        print(f"- Filtered Logs: {metrics.get('filtered_logs', 0)}")
+        print(f"- LSTM Available: {metrics.get('lstm_available', False)}")
+        print(f"- Vector DB Available: {metrics.get('vector_db_available', False)}")
+    
     print("\n" + results['root_cause_analysis'])
     
     if results['recommendations']:
         print("\nRECOMMENDATIONS:")
         for i, rec in enumerate(results['recommendations'], 1):
             print(f"{i}. {rec}")
+    
+    # Display top filtered logs with scores
+    if 'filtered_logs' in results and not results['filtered_logs'].empty:
+        print(f"\nTOP RELEVANT LOGS (showing first 5):")
+        top_logs = results['filtered_logs'].head(5)
+        for _, log in top_logs.iterrows():
+            score = log.get('combined_score', log.get('lstm_importance', 0))
+            print(f"- [{log.get('level', 'INFO')}] {log.get('service_type', 'unknown')}: {log.get('message', '')[:100]}... (Score: {score:.3f})")
     
     return results
 
@@ -236,7 +253,7 @@ def main():
             logger.info("You can now run: python main.py --mode train --logs logs")
         else:
             logger.error("Setup failed. Please place OpenStack_2k.log in the project directory.")
-    
+        
     elif args.mode == 'vector-db':
         logger.info("Vector Database Management Mode")
         
