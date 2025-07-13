@@ -43,6 +43,8 @@ class OpenStackRCAAssistant:
             st.session_state.rca_analyzer = None
         if 'chat_history' not in st.session_state:
             st.session_state.chat_history = []
+        if 'vector_db' not in st.session_state:
+            st.session_state.vector_db = None
     
     def run(self):
         """Main application runner"""
@@ -98,15 +100,41 @@ class OpenStackRCAAssistant:
                     )
                     st.sidebar.success("✅ Claude API connected")
                 except Exception as e:
-                    st.sidebar.error(f"❌ API connection failed: {e}")
-        else:
-            st.sidebar.warning("⚠️ API key required for RCA analysis")
+                    st.sidebar.error(f"❌ Failed to connect: {e}")
         
-        # Data management
-        st.sidebar.header("Data Management")
+        # Global prompt display toggle
+        st.sidebar.subheader("Display Options")
+        st.session_state.show_prompt_global = st.sidebar.checkbox(
+            "Always show LLM prompts",
+            value=st.session_state.get('show_prompt_global', False),
+            help="Show the final prompt sent to the AI model for all analyses"
+        )
         
+        # Data source information
+        st.sidebar.subheader("Data Source")
+        
+        # Check if VectorDB is available and has data
+        vector_db_available = hasattr(st.session_state, 'vector_db') and st.session_state.vector_db is not None
+        if vector_db_available:
+            try:
+                vector_db_count = st.session_state.vector_db.collection.count()
+                st.sidebar.success(f"✅ VectorDB: {vector_db_count} documents")
+                st.sidebar.info("RCA analysis uses VectorDB data")
+            except:
+                vector_db_available = False
+        
+        # Show file system data count
         if not st.session_state.logs_df.empty:
-            st.sidebar.metric("Total Log Entries", len(st.session_state.logs_df))
+            file_count = len(st.session_state.logs_df)
+            if vector_db_available:
+                st.sidebar.warning(f"⚠️ File System: {file_count} logs")
+                st.sidebar.info("UI shows file data, RCA uses VectorDB")
+                
+                # Add sync button
+                if st.sidebar.button("🔄 Sync with VectorDB"):
+                    self._sync_with_vector_db()
+            else:
+                st.sidebar.metric("Total Log Entries", file_count)
             
             # Data statistics
             if 'timestamp' in st.session_state.logs_df.columns:
@@ -138,10 +166,17 @@ class OpenStackRCAAssistant:
                 self.process_uploaded_files(uploaded_files)
         
         with col2:
-            st.subheader("Load OpenStack_2k.log")
-            st.info("Load the actual OpenStack log file for analysis")
-            if st.button("📊 Load OpenStack_2k.log"):
-                self.load_sample_data()
+            st.subheader("Load All Logs")
+            st.info("Load all OpenStack log files for analysis (one-time setup)")
+            
+            # Check if logs are already loaded
+            if not st.session_state.logs_df.empty:
+                st.success(f"✅ {len(st.session_state.logs_df)} logs already loaded")
+                if st.button("🔄 Reload All Logs"):
+                    self.load_all_logs()
+            else:
+                if st.button("📊 Load All Logs"):
+                    self.load_all_logs()
         
         # Show sample log format
         st.subheader("Expected Log Format")
@@ -183,56 +218,278 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             except Exception as e:
                 st.error(f"❌ Error processing files: {str(e)}")
     
-    def load_sample_data(self):
-        """Load OpenStack_2k.log data for demonstration"""
-        with st.spinner("Loading OpenStack_2k.log data..."):
+    def load_all_logs(self):
+        """Load all available OpenStack log files (optimized one-time process)"""
+        with st.spinner("Loading all OpenStack logs (this may take a few minutes)..."):
             try:
-                # Try to find OpenStack_2k.log file
-                possible_paths = [
-                    'OpenStack_2k.log',
-                    'logs/OpenStack_2k.log',
-                    '../OpenStack_2k.log'
-                ]
+                # First, check if VectorDB already has data
+                if hasattr(st.session_state, 'vector_db') and st.session_state.vector_db:
+                    try:
+                        vector_db_count = st.session_state.vector_db.collection.count()
+                        if vector_db_count > 0:
+                            st.info(f"📊 VectorDB already has {vector_db_count} documents loaded")
+                            
+                            # Load data from VectorDB instead of file system
+                            df = self._load_logs_from_vector_db()
+                            
+                            if not df.empty:
+                                # Apply feature engineering
+                                with st.spinner("Applying feature engineering..."):
+                                    df = self.feature_engineer.engineer_all_features(df)
+                                
+                                # Store in session state
+                                st.session_state.logs_df = df
+                                
+                                # Show success message
+                                st.success(f"✅ Successfully loaded {len(df)} log entries from VectorDB")
+                                st.info("🎯 UI now uses the same data source as RCA analysis")
+                                
+                                # Show detailed statistics
+                                self._show_loading_success(df, [f"VectorDB ({vector_db_count} documents)"])
+                                
+                                st.rerun()
+                                return
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not load from VectorDB: {e}")
                 
-                log_file_path = None
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        log_file_path = path
-                        break
+                # Fallback to file system loading
+                # Step 1: Discover all log files
+                log_files = self._discover_all_log_files()
                 
-                if not log_file_path:
-                    st.error("❌ OpenStack_2k.log file not found. Please ensure it's in the project directory.")
-                    st.info("Expected locations: OpenStack_2k.log or logs/OpenStack_2k.log")
+                if not log_files:
+                    st.error("❌ No log files found. Please ensure log files are in the project directory.")
+                    st.info("Expected locations: logs/ directory or root directory")
                     return
                 
-                # Ingest the actual log file
-                df = self.ingestion_manager.ingest_single_file(log_file_path)
+                st.info(f"📁 Found {len(log_files)} log files to process")
+                
+                # Step 2: Load and parse logs (without VectorDB storage)
+                df = self._load_logs_without_vector_db(log_files)
                 
                 if not df.empty:
-                    # Apply feature engineering
-                    df = self.feature_engineer.engineer_all_features(df)
+                    # Step 3: Apply feature engineering
+                    with st.spinner("Applying feature engineering..."):
+                        df = self.feature_engineer.engineer_all_features(df)
+                    
+                    # Step 4: Store in session state
                     st.session_state.logs_df = df
                     
-                    st.success(f"✅ Successfully loaded {len(df)} log entries from OpenStack_2k.log")
+                    # Step 5: Show success message with detailed stats
+                    self._show_loading_success(df, log_files)
                     
-                    # Show some statistics about the loaded data
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Entries", len(df))
-                    with col2:
-                        error_count = len(df[df['level'].str.upper() == 'ERROR']) if 'level' in df.columns else 0
-                        st.metric("Error Entries", error_count)
-                    with col3:
-                        unique_instances = df['instance_id'].nunique() if 'instance_id' in df.columns else 0
-                        st.metric("Unique Instances", unique_instances)
+                    # Step 6: Offer VectorDB setup (one-time)
+                    self._offer_vector_db_setup(df)
                     
                     st.rerun()
                 else:
-                    st.error("❌ No valid log entries found in OpenStack_2k.log")
+                    st.error("❌ No valid log entries found in the discovered files")
                     
             except Exception as e:
-                st.error(f"❌ Error loading OpenStack_2k.log: {str(e)}")
-                st.info("Please check that the file exists and is readable.")
+                st.error(f"❌ Error loading logs: {str(e)}")
+                st.info("Please check that the log files exist and are readable.")
+    
+    def _discover_all_log_files(self):
+        """Discover all available log files"""
+        log_files = []
+        
+        # Search in multiple locations
+        search_paths = [
+            'logs/',
+            './',
+            '../',
+            'data/',
+            'sample_data/'
+        ]
+        
+        for search_path in search_paths:
+            if os.path.exists(search_path):
+                for root, dirs, files in os.walk(search_path):
+                    for file in files:
+                        if file.endswith(('.log', '.txt')) and 'openstack' in file.lower():
+                            log_files.append(os.path.join(root, file))
+        
+        # Also look for specific known files
+        specific_files = [
+            'OpenStack_2k.log',
+            'OpenStack.log',
+            'nova.log',
+            'openstack.log'
+        ]
+        
+        for file in specific_files:
+            if os.path.exists(file):
+                log_files.append(file)
+        
+        return list(set(log_files))  # Remove duplicates
+    
+    def _load_logs_without_vector_db(self, log_files):
+        """Load logs without storing in VectorDB (for performance)"""
+        all_dfs = []
+        
+        # Create a temporary ingestion manager without VectorDB
+        from data.log_ingestion import LogIngestionManager
+        temp_ingestion_manager = LogIngestionManager()
+        temp_ingestion_manager.vector_db = None  # Disable VectorDB
+        
+        for i, log_file in enumerate(log_files):
+            st.text(f"Processing {i+1}/{len(log_files)}: {os.path.basename(log_file)}")
+            
+            try:
+                df = temp_ingestion_manager.ingest_single_file(log_file)
+                if not df.empty:
+                    all_dfs.append(df)
+            except Exception as e:
+                st.warning(f"⚠️ Failed to process {log_file}: {e}")
+                continue
+        
+        if not all_dfs:
+            return pd.DataFrame()
+        
+        # Combine all dataframes
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        
+        # Sort by timestamp if available
+        if 'timestamp' in combined_df.columns:
+            combined_df = combined_df.sort_values('timestamp').reset_index(drop=True)
+        
+        return combined_df
+    
+    def _sync_with_vector_db(self):
+        """Sync UI data with VectorDB data"""
+        with st.spinner("Syncing with VectorDB..."):
+            try:
+                df = self._load_logs_from_vector_db()
+                
+                if not df.empty:
+                    # Apply feature engineering
+                    with st.spinner("Applying feature engineering..."):
+                        df = self.feature_engineer.engineer_all_features(df)
+                    
+                    # Store in session state
+                    st.session_state.logs_df = df
+                    
+                    st.success(f"✅ Successfully synced with VectorDB! {len(df)} logs loaded")
+                    st.info("🎯 UI now uses the same data source as RCA analysis")
+                    st.rerun()
+                else:
+                    st.error("❌ No data found in VectorDB")
+                    
+            except Exception as e:
+                st.error(f"❌ Sync failed: {e}")
+    
+    def _load_logs_from_vector_db(self):
+        """Load logs from VectorDB to sync UI with RCA analysis"""
+        try:
+            if not st.session_state.vector_db:
+                return pd.DataFrame()
+            
+            # Get all documents from VectorDB
+            results = st.session_state.vector_db.collection.get()
+            
+            if not results['documents']:
+                return pd.DataFrame()
+            
+            # Convert VectorDB results to DataFrame
+            logs_data = []
+            for i, doc in enumerate(results['documents']):
+                metadata = results['metadatas'][i] if results['metadatas'] else {}
+                
+                log_entry = {
+                    'message': doc,
+                    'timestamp': metadata.get('timestamp'),
+                    'level': metadata.get('level', 'INFO'),
+                    'service_type': metadata.get('service_type', 'unknown'),
+                    'instance_id': metadata.get('instance_id'),
+                    'request_id': metadata.get('request_id'),
+                    'source_file': metadata.get('source_file', 'vector_db')
+                }
+                logs_data.append(log_entry)
+            
+            df = pd.DataFrame(logs_data)
+            
+            # Convert timestamp to datetime if needed
+            if 'timestamp' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            
+            # Sort by timestamp if available
+            if 'timestamp' in df.columns:
+                df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            st.info(f"📊 Loaded {len(df)} logs from VectorDB")
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Failed to load from VectorDB: {e}")
+            return pd.DataFrame()
+    
+    def _show_loading_success(self, df, log_files):
+        """Show detailed success message with statistics"""
+        st.success(f"✅ Successfully loaded {len(df)} log entries from {len(log_files)} files")
+        
+        # Show detailed statistics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Log Entries", len(df))
+        
+        with col2:
+            error_count = len(df[df['level'].str.upper() == 'ERROR']) if 'level' in df.columns else 0
+            st.metric("Error Entries", error_count)
+        
+        with col3:
+            unique_instances = df['instance_id'].nunique() if 'instance_id' in df.columns else 0
+            st.metric("Unique Instances", unique_instances)
+        
+        with col4:
+            unique_services = df['service_type'].nunique() if 'service_type' in df.columns else 0
+            st.metric("Services", unique_services)
+        
+        # Show file breakdown
+        if 'source_file' in df.columns:
+            st.subheader("📊 Files Processed:")
+            file_stats = df['source_file'].value_counts().head(10)
+            for file, count in file_stats.items():
+                st.text(f"  • {os.path.basename(file)}: {count} entries")
+    
+    def _offer_vector_db_setup(self, df):
+        """Offer to set up VectorDB for historical context (one-time)"""
+        st.subheader("🔍 Vector Database Setup (Optional)")
+        st.info("VectorDB enables historical context and similarity search for better RCA analysis.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🚀 Setup VectorDB (Recommended)"):
+                self._setup_vector_db(df)
+        
+        with col2:
+            if st.button("⏭️ Skip VectorDB Setup"):
+                st.success("✅ VectorDB setup skipped. You can enable it later for enhanced analysis.")
+    
+    def _setup_vector_db(self, df):
+        """Set up VectorDB with loaded logs (one-time process)"""
+        with st.spinner("Setting up VectorDB for historical context..."):
+            try:
+                # Initialize VectorDB service
+                from services.vector_db_service import VectorDBService
+                vector_db = VectorDBService()
+                
+                # Add logs to VectorDB
+                logs_added = vector_db.add_logs(df, enable_chunking=False)
+                
+                st.success(f"✅ VectorDB setup complete! {logs_added} logs stored for historical context.")
+                st.info("🎯 You can now use enhanced RCA analysis with historical context.")
+                
+                # Store VectorDB reference in session state
+                st.session_state.vector_db = vector_db
+                
+            except Exception as e:
+                st.error(f"❌ VectorDB setup failed: {e}")
+                st.info("You can still use RCA analysis without VectorDB (fast mode).")
+    
+    def load_sample_data(self):
+        """Legacy method - redirect to new load_all_logs"""
+        self.load_all_logs()
     
     def create_sample_log_data(self):
         """Create sample log data for demonstration"""
@@ -357,34 +614,45 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             height=100
         )
         
-        # Fast mode option
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            fast_mode = st.checkbox(
-                "🚀 Fast Mode", 
-                value=False,
-                help="Enable fast mode for quicker analysis (skips vector database, uses LSTM + TF-IDF only)"
-            )
-        
-        with col2:
-            if fast_mode:
-                st.info("⚡ Fast Mode Enabled")
+        # Add toggle for showing prompt (default to global setting)
+        show_prompt = st.checkbox(
+            "🔍 Show final prompt sent to LLM", 
+            value=st.session_state.get('show_prompt_global', False), 
+            help="Display the complete prompt that was sent to the AI model"
+        )
         
         if st.button("🔍 Analyze Issue") and issue_description:
-            self.perform_rca_analysis(issue_description, fast_mode)
+            self.perform_rca_analysis(issue_description, fast_mode=False, show_prompt=show_prompt)
         
         # Display chat history
         if st.session_state.chat_history:
             st.subheader("Analysis Results:")
             for i, chat in enumerate(st.session_state.chat_history):
                 with st.expander(f"Analysis {i+1}: {chat['issue'][:50]}...", expanded=(i == len(st.session_state.chat_history)-1)):
-                    self.display_rca_results(chat['results'])
+                    # Use local setting if available, otherwise use global setting
+                    local_show_prompt = chat.get('show_prompt', st.session_state.get('show_prompt_global', False))
+                    self.display_rca_results(chat['results'], local_show_prompt)
     
-    def perform_rca_analysis(self, issue_description, fast_mode=False):
+    def perform_rca_analysis(self, issue_description, fast_mode=False, show_prompt=False):
         """Perform RCA analysis on the described issue"""
         with st.spinner("Analyzing logs and generating root cause analysis..."):
             try:
-                results = st.session_state.rca_analyzer.analyze_issue(
+                # Use pre-loaded VectorDB if available, otherwise create new one
+                if hasattr(st.session_state, 'vector_db') and st.session_state.vector_db:
+                    # Use existing VectorDB for better performance
+                    rca_analyzer = RCAAnalyzer(
+                        Config.ANTHROPIC_API_KEY, 
+                        st.session_state.lstm_model,
+                        st.session_state.vector_db  # Use pre-loaded VectorDB
+                    )
+                else:
+                    # Create new RCA analyzer (will initialize VectorDB if needed)
+                    rca_analyzer = RCAAnalyzer(
+                        Config.ANTHROPIC_API_KEY, 
+                        st.session_state.lstm_model
+                    )
+                
+                results = rca_analyzer.analyze_issue(
                     issue_description, 
                     st.session_state.logs_df,
                     fast_mode=fast_mode
@@ -395,7 +663,8 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                     'timestamp': datetime.now(),
                     'issue': issue_description,
                     'results': results,
-                    'fast_mode': fast_mode
+                    'fast_mode': fast_mode,
+                    'show_prompt': show_prompt
                 })
                 
                 st.success("✅ Analysis complete!")
@@ -404,7 +673,7 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             except Exception as e:
                 st.error(f"❌ Analysis failed: {str(e)}")
     
-    def display_rca_results(self, results):
+    def display_rca_results(self, results, show_prompt=False):
         """Display RCA analysis results"""
         # Issue summary
         st.write(f"**Issue Category:** {results.get('issue_category', 'Unknown')}")
@@ -412,10 +681,28 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
         
         # Analysis mode indicator
         analysis_mode = results.get('analysis_mode', 'full')
-        if analysis_mode == 'fast':
+        if analysis_mode == 'hybrid':
+            st.info("🔍 Analysis performed in Hybrid Mode (LSTM + Vector DB + TF-IDF)")
+        elif analysis_mode == 'fast':
             st.info("⚡ Analysis performed in Fast Mode (LSTM + TF-IDF only)")
         else:
-            st.info("🔍 Analysis performed in Full Mode (LSTM + Vector DB + TF-IDF)")
+            st.info("🔍 Analysis performed in Full Mode")
+        
+        # Historical Context (NEW)
+        if hasattr(st.session_state, 'vector_db') and st.session_state.vector_db:
+            try:
+                # Extract issue description from results or use a placeholder
+                issue_description = results.get('issue_description', 'Unknown issue')
+                
+                # Get historical context
+                historical_context = st.session_state.vector_db.get_context_for_issue(issue_description, top_k=3)
+                
+                if historical_context:
+                    st.subheader("📚 Historical Context")
+                    st.info("Similar issues found in historical data:")
+                    st.text(historical_context)
+            except Exception as e:
+                st.warning(f"⚠️ Could not retrieve historical context: {e}")
         
         # Root cause analysis
         if 'root_cause_analysis' in results:
@@ -426,7 +713,19 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
         if results.get('timeline'):
             st.subheader("⏱️ Event Timeline")
             timeline_df = pd.DataFrame(results['timeline'])
-            st.dataframe(timeline_df[['timestamp', 'event_type', 'service', 'level']])
+            
+            # Check which columns are available and display them
+            available_columns = []
+            expected_columns = ['timestamp', 'event_type', 'service', 'level']
+            
+            for col in expected_columns:
+                if col in timeline_df.columns:
+                    available_columns.append(col)
+            
+            if available_columns:
+                st.dataframe(timeline_df[available_columns])
+            else:
+                st.dataframe(timeline_df)  # Display all available columns
         
         # Patterns
         if results.get('patterns'):
@@ -452,6 +751,10 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             st.subheader("💡 Recommendations")
             for i, rec in enumerate(results['recommendations'], 1):
                 st.write(f"{i}. {rec}")
+        
+        if show_prompt:
+            st.subheader("🔍 Prompt Sent to LLM:")
+            st.code(results.get('prompt', 'N/A'), language="text")
     
     def render_log_analysis(self):
         """Render detailed log analysis section"""

@@ -79,32 +79,45 @@ class LogPreprocessor:
         return tokens
     
     def create_importance_labels(self, df: pd.DataFrame) -> pd.Series:
-        """Create binary labels for log importance"""
+        """Create binary labels for log importance with emphasis on ERROR logs"""
         labels = []
         
         for _, row in df.iterrows():
             message = str(row.get('message', '')).lower()
             level = str(row.get('level', '')).lower()
             
-            # Check for important keywords
+            # HIGH PRIORITY: ERROR and CRITICAL logs
+            if level in ['error', 'critical']:
+                labels.append(1)
+                continue
+            
+            # Check for important keywords (but lower priority than ERROR level)
             has_important_keyword = any(keyword in message for keyword in self.important_keywords)
             
-            # Check log level
-            is_important_level = level in ['error', 'critical', 'warning']
+            # Check for specific critical patterns
+            has_critical_pattern = any(pattern in message for pattern in [
+                'no valid host', 'connection failed', 'timeout', 'denied', 'rejected',
+                'insufficient', 'quota exceeded', 'disk full', 'memory exhausted',
+                'instance failed', 'spawn failed', 'termination failed'
+            ])
             
-            # Check for specific patterns
+            # Check for instance lifecycle events (important but not critical)
             has_instance_action = any(pattern in message for pattern in [
                 'spawning', 'terminating', 'destroyed', 'instance spawned',
                 'instance destroyed', 'vm started', 'vm stopped', 'vm paused'
             ])
             
+            # Check for resource issues (important)
             has_resource_issue = any(pattern in message for pattern in [
                 'claim', 'resource', 'disk', 'memory', 'vcpu', 'attempting claim'
             ])
             
+            # WARNING level logs are also important
+            is_warning = level == 'warning'
+            
             # Label as important if any condition is met
-            is_important = (has_important_keyword or is_important_level or 
-                          has_instance_action or has_resource_issue)
+            is_important = (has_important_keyword or has_critical_pattern or 
+                          has_instance_action or has_resource_issue or is_warning)
             
             labels.append(1 if is_important else 0)
         

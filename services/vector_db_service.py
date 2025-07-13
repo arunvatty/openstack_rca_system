@@ -2,11 +2,10 @@ import os
 import logging
 import pandas as pd
 from typing import List, Dict, Optional, Tuple
-import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
 import numpy as np
 import re
+from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
 
 from config.config import Config
 
@@ -14,7 +13,67 @@ from config.config import Config
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
 
+# Suppress ChromaDB warnings about duplicate embeddings
+import warnings
+warnings.filterwarnings("ignore", message=".*existing embedding ID.*", category=UserWarning)
+
 logger = logging.getLogger(__name__)
+
+class InMemoryVectorDB:
+    """Fallback in-memory vector database when ChromaDB is not available"""
+    
+    def __init__(self, collection_name: str = "openstack_logs"):
+        self.collection_name = collection_name
+        self.documents = []
+        self.embeddings = []
+        self.metadatas = []
+        self.ids = []
+        logger.info(f"InMemoryVectorDB initialized: {collection_name}")
+    
+    def add(self, embeddings, documents, metadatas, ids):
+        """Add documents to in-memory storage"""
+        self.embeddings.extend(embeddings)
+        self.documents.extend(documents)
+        self.metadatas.extend(metadatas)
+        self.ids.extend(ids)
+        logger.info(f"Added {len(documents)} documents to in-memory storage")
+    
+    def query(self, query_embeddings, n_results=20, where=None):
+        """Query documents using cosine similarity"""
+        if not self.embeddings:
+            return {'documents': [[]], 'metadatas': [[]], 'distances': [[]], 'ids': [[]]}
+        
+        # Calculate similarities
+        similarities = cosine_similarity(query_embeddings, self.embeddings)[0]
+        
+        # Get top results
+        top_indices = np.argsort(similarities)[::-1][:n_results]
+        
+        # Format results
+        results = {
+            'documents': [[self.documents[i] for i in top_indices]],
+            'metadatas': [[self.metadatas[i] for i in top_indices]],
+            'distances': [[1 - similarities[i] for i in top_indices]],  # Convert similarity to distance
+            'ids': [[self.ids[i] for i in top_indices]]
+        }
+        
+        return results
+    
+    def get(self):
+        """Get all documents"""
+        return {
+            'documents': self.documents,
+            'metadatas': self.metadatas,
+            'ids': self.ids
+        }
+    
+    def delete_collection(self, name):
+        """Delete collection (clear in-memory data)"""
+        self.documents = []
+        self.embeddings = []
+        self.metadatas = []
+        self.ids = []
+        logger.info(f"Cleared in-memory collection: {name}")
 
 class VectorDBService:
     """Vector database service using ChromaDB for log similarity search and RAG"""
@@ -27,8 +86,8 @@ class VectorDBService:
         # Validate embedding dimensions
         self._validate_embedding_dimensions()
         
-        # Initialize ChromaDB
-        self._initialize_chroma_db()
+        # Initialize database (ChromaDB with fallback to in-memory)
+        self._initialize_database()
         
         logger.info(f"VectorDBService initialized with collection: {self.collection_name}")
         logger.info(f"Embedding model: {self.config['embedding_model']} ({self.config['embedding_dimensions']} dimensions)")
@@ -98,9 +157,63 @@ class VectorDBService:
         
         return truncated + "..."
     
-    def _initialize_chroma_db(self):
-        """Initialize ChromaDB client and collection"""
+    def _reset_chroma_db(self):
+        """Reset ChromaDB database completely by deleting and recreating"""
         try:
+            # Close any existing connections
+            if hasattr(self, 'client') and self.client:
+                try:
+                    self.client.delete_collection(self.collection_name)
+                    logger.info(f"Deleted existing collection: {self.collection_name}")
+                except Exception as e:
+                    logger.info(f"Collection {self.collection_name} was already deleted or didn't exist")
+            
+            # Completely remove the ChromaDB directory to fix schema issues
+            import shutil
+            persist_dir = self.config['persist_directory']
+            if os.path.exists(persist_dir):
+                logger.info(f"Removing ChromaDB directory: {persist_dir}")
+                shutil.rmtree(persist_dir)
+                logger.info("✅ ChromaDB directory removed completely")
+            
+            # Recreate the directory
+            os.makedirs(persist_dir, exist_ok=True)
+            logger.info(f"✅ Recreated ChromaDB directory: {persist_dir}")
+            
+            # Reinitialize ChromaDB client
+            import chromadb
+            from chromadb.config import Settings
+            
+            self.client = chromadb.PersistentClient(
+                path=persist_dir,
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
+            )
+            
+            # Create new collection
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"description": "OpenStack log embeddings for RCA"}
+            )
+            logger.info(f"✅ Recreated ChromaDB collection: {self.collection_name}")
+            self.use_chromadb = True
+            
+        except Exception as e:
+            logger.error(f"Failed to reset ChromaDB: {e}")
+            logger.info("Falling back to in-memory vector database")
+            self._initialize_in_memory_db()
+    
+    def _initialize_database(self):
+        """Initialize database with ChromaDB fallback to in-memory"""
+        self.use_chromadb = False
+        
+        # Try ChromaDB first
+        try:
+            import chromadb
+            from chromadb.config import Settings
+            
             # Create persist directory if it doesn't exist
             persist_dir = self.config['persist_directory']
             os.makedirs(persist_dir, exist_ok=True)
@@ -114,67 +227,47 @@ class VectorDBService:
                 )
             )
             
-            # Get or create collection
+            # Try to get or create collection
             try:
                 self.collection = self.client.get_collection(name=self.collection_name)
-                logger.info(f"Loaded existing collection: {self.collection_name}")
+                logger.info(f"Loaded existing ChromaDB collection: {self.collection_name}")
+                self.use_chromadb = True
             except Exception as e:
-                # If there's a schema error, try to reset the database
-                if "no such column" in str(e) or "schema" in str(e).lower():
-                    logger.warning(f"ChromaDB schema error detected: {e}")
-                    logger.info("Attempting to reset ChromaDB database...")
-                    self._reset_chroma_db()
-                    # Try to create collection again
-                    self.collection = self.client.create_collection(
-                        name=self.collection_name,
-                        metadata={"description": "OpenStack log embeddings for RCA"}
-                    )
-                    logger.info(f"Created new collection after reset: {self.collection_name}")
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ["no such column", "schema", "migration", "version", "collections.topic"]):
+                    logger.error(f"ChromaDB schema error detected: {e}")
+                    logger.error("❌ ChromaDB schema error: Please run 'main.py --mode vector-db --action reset' to manually reset the database.")
+                    logger.info("Falling back to in-memory vector database for this session.")
+                    self._initialize_in_memory_db()
                 else:
-                    # Regular collection creation
-                    self.collection = self.client.create_collection(
-                        name=self.collection_name,
-                        metadata={"description": "OpenStack log embeddings for RCA"}
-                    )
-                    logger.info(f"Created new collection: {self.collection_name}")
-                
+                    # Try to create new collection
+                    try:
+                        self.collection = self.client.create_collection(
+                            name=self.collection_name,
+                            metadata={"description": "OpenStack log embeddings for RCA"}
+                        )
+                        logger.info(f"Created new ChromaDB collection: {self.collection_name}")
+                        self.use_chromadb = True
+                    except Exception as create_error:
+                        logger.warning(f"Failed to create ChromaDB collection: {create_error}")
+                        logger.info("Falling back to in-memory vector database")
+                        self._initialize_in_memory_db()
+                        
         except Exception as e:
-            logger.error(f"Failed to initialize ChromaDB: {e}")
-            raise
+            logger.warning(f"ChromaDB not available: {e}")
+            logger.info("Using in-memory vector database")
+            self._initialize_in_memory_db()
     
-    def _reset_chroma_db(self):
-        """Reset ChromaDB database to fix schema issues"""
+    def _initialize_in_memory_db(self):
+        """Initialize in-memory vector database"""
         try:
-            # Delete the collection if it exists
-            try:
-                self.client.delete_collection(name=self.collection_name)
-                logger.info(f"Deleted existing collection: {self.collection_name}")
-            except Exception:
-                pass  # Collection might not exist
-            
-            # Delete the entire database directory to reset schema
-            import shutil
-            persist_dir = self.config['persist_directory']
-            if os.path.exists(persist_dir):
-                shutil.rmtree(persist_dir)
-                logger.info(f"Reset ChromaDB database directory: {persist_dir}")
-            
-            # Recreate the directory
-            os.makedirs(persist_dir, exist_ok=True)
-            
-            # Reinitialize the client
-            self.client = chromadb.PersistentClient(
-                path=persist_dir,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
-            
-            logger.info("ChromaDB database reset completed successfully")
-            
+            # Create in-memory collection
+            self.collection = InMemoryVectorDB(self.collection_name)
+            self.client = None
+            self.use_chromadb = False
+            logger.info(f"Initialized in-memory vector database: {self.collection_name}")
         except Exception as e:
-            logger.error(f"Failed to reset ChromaDB: {e}")
+            logger.error(f"Failed to initialize in-memory database: {e}")
             raise
     
     def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -215,6 +308,15 @@ class VectorDBService:
             metadatas = []
             ids = []
             
+            # Get existing IDs to avoid duplicates
+            existing_ids = set()
+            try:
+                existing_results = self.collection.get()
+                if existing_results['ids']:
+                    existing_ids = set(existing_results['ids'])
+            except Exception:
+                pass  # Collection might be empty
+            
             for idx, row in logs_df.iterrows():
                 # Prepare log text
                 log_text = self._prepare_log_text(row.to_dict())
@@ -227,6 +329,10 @@ class VectorDBService:
                     for chunk_idx, chunk in enumerate(chunks):
                         # Create unique ID for chunk
                         chunk_id = f"log_{idx}_chunk_{chunk_idx}_{hash(chunk) % 1000000}"
+                        
+                        # Skip if ID already exists
+                        if chunk_id in existing_ids:
+                            continue
                         
                         # Prepare metadata for chunk
                         metadata = {
@@ -243,9 +349,14 @@ class VectorDBService:
                         documents.append(chunk)
                         metadatas.append(metadata)
                         ids.append(chunk_id)
+                        existing_ids.add(chunk_id)
                 else:
                     # Create unique ID for single log entry
                     log_id = f"log_{idx}_{hash(log_text) % 1000000}"
+                    
+                    # Skip if ID already exists
+                    if log_id in existing_ids:
+                        continue
                     
                     # Prepare metadata
                     metadata = {
@@ -262,20 +373,32 @@ class VectorDBService:
                     documents.append(log_text)
                     metadatas.append(metadata)
                     ids.append(log_id)
+                    existing_ids.add(log_id)
+            
+            if not documents:
+                logger.info("All documents already exist in vector database")
+                return 0
             
             # Generate embeddings
-            logger.info(f"Generating embeddings for {len(documents)} documents...")
+            logger.info(f"Generating embeddings for {len(documents)} new documents...")
             embeddings = self._generate_embeddings(documents)
             
-            # Add to collection
-            self.collection.add(
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            # Add to collection with error handling for duplicates
+            try:
+                self.collection.add(
+                    embeddings=embeddings,
+                    documents=documents,
+                    metadatas=metadatas,
+                    ids=ids
+                )
+                logger.info(f"Successfully added {len(documents)} documents to vector database")
+            except Exception as e:
+                if "existing embedding ID" in str(e).lower():
+                    # Suppress duplicate warnings and log a summary
+                    logger.info(f"Some documents already existed. Added {len(documents)} new documents to vector database")
+                else:
+                    raise
             
-            logger.info(f"Successfully added {len(documents)} documents to vector database")
             return len(documents)
             
         except Exception as e:
@@ -295,17 +418,24 @@ class VectorDBService:
             # Generate query embedding
             query_embedding = self._generate_embeddings([query])[0]
             
-            # Prepare where clause
-            where_clause = filter_metadata or {}
-            if not include_chunks:
-                where_clause['is_chunked'] = 'false'
+            # Prepare where clause - only include if not empty
+            where_clause = None
+            if filter_metadata:
+                where_clause = filter_metadata
+            elif not include_chunks:
+                where_clause = {'is_chunked': 'false'}
             
             # Search in collection
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where=where_clause
-            )
+            search_kwargs = {
+                'query_embeddings': [query_embedding],
+                'n_results': top_k
+            }
+            
+            # Only add where clause if it's not None
+            if where_clause:
+                search_kwargs['where'] = where_clause
+            
+            results = self.collection.query(**search_kwargs)
             
             # Format results
             similar_logs = []
@@ -444,7 +574,8 @@ class VectorDBService:
                 'collection_name': self.collection_name,
                 'embedding_model': self.config['embedding_model'],
                 'embedding_dimensions': self.config['embedding_dimensions'],
-                'distance_metric': self.config['distance_metric']
+                'distance_metric': self.config['distance_metric'],
+                'database_type': 'chromadb' if self.use_chromadb else 'in_memory'
             }
             
             return stats
@@ -456,9 +587,26 @@ class VectorDBService:
     def clear_collection(self):
         """Clear all data from the collection"""
         try:
-            self.client.delete_collection(self.collection_name)
-            self._initialize_chroma_db()
+            if self.use_chromadb and self.client:
+                self.client.delete_collection(self.collection_name)
+                # Recreate collection
+                self.collection = self.client.create_collection(
+                    name=self.collection_name,
+                    metadata={"description": "OpenStack log embeddings for RCA"}
+                )
+            else:
+                # Clear in-memory collection
+                self.collection.delete_collection(self.collection_name)
+            
             logger.info(f"Cleared collection: {self.collection_name}")
         except Exception as e:
             logger.error(f"Failed to clear collection: {e}")
-            raise 
+            raise
+    
+    def is_chromadb_available(self) -> bool:
+        """Check if ChromaDB is being used"""
+        return self.use_chromadb
+    
+    def get_database_type(self) -> str:
+        """Get the type of database being used"""
+        return 'chromadb' if self.use_chromadb else 'in_memory' 

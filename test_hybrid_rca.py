@@ -14,7 +14,6 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from models.hybrid_rca_analyzer import HybridRCAAnalyzer
 from models.rca_analyzer import RCAAnalyzer
 from models.lstm_classifier import LSTMLogClassifier
 from utils.log_cache import LogCache
@@ -69,7 +68,7 @@ def test_hybrid_vs_original():
     ]
     
     # Initialize analyzers
-    hybrid_analyzer = HybridRCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
+    hybrid_analyzer = RCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
     original_analyzer = RCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
     
     logger.info("="*60)
@@ -196,7 +195,7 @@ def test_hybrid_features():
         logger.info("✓ LSTM model loaded")
     
     # Initialize Hybrid analyzer
-    hybrid_analyzer = HybridRCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
+    hybrid_analyzer = RCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
     
     # Get logs
     logs_df = log_cache.get_cached_logs(Config.DATA_DIR)
