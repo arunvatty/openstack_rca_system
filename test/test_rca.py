@@ -90,7 +90,7 @@ def test_rca():
     print("\n2️⃣ Loading modules...")
     try:
         from data.log_ingestion import LogIngestionManager
-        from models.rca_analyzer import RCAAnalyzer
+        from lstm.rca_analyzer import RCAAnalyzer
         from utils.feature_engineering import FeatureEngineer
         print("✅ All modules imported successfully")
     except ImportError as e:

@@ -14,8 +14,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.config import Config
 from data.log_ingestion import LogIngestionManager
 from data.preprocessing import LogPreprocessor
-from models.lstm_classifier import LSTMLogClassifier
-from models.rca_analyzer import RCAAnalyzer
+from lstm.lstm_classifier import LSTMLogClassifier
+from lstm.rca_analyzer import RCAAnalyzer
 from utils.feature_engineering import FeatureEngineer
 
 # Configure Streamlit page
@@ -115,6 +115,8 @@ class OpenStackRCAAssistant:
         
         # Check if VectorDB is available and has data
         vector_db_available = hasattr(st.session_state, 'vector_db') and st.session_state.vector_db is not None
+        vector_db_count = 0
+        
         if vector_db_available:
             try:
                 vector_db_count = st.session_state.vector_db.collection.count()
@@ -123,29 +125,44 @@ class OpenStackRCAAssistant:
             except:
                 vector_db_available = False
         
-        # Show file system data count
+        # Show UI data source information
         if not st.session_state.logs_df.empty:
-            file_count = len(st.session_state.logs_df)
-            if vector_db_available:
-                st.sidebar.warning(f"⚠️ File System: {file_count} logs")
-                st.sidebar.info("UI shows file data, RCA uses VectorDB")
+            ui_count = len(st.session_state.logs_df)
+            
+            # Determine data source
+            if vector_db_available and ui_count == vector_db_count:
+                st.sidebar.success(f"🎯 UI Data: {ui_count} logs (synced with VectorDB)")
+                st.sidebar.info("✅ UI and RCA using same data source")
+            elif vector_db_available and ui_count != vector_db_count:
+                st.sidebar.warning(f"⚠️ UI Data: {ui_count} logs (out of sync)")
+                st.sidebar.info(f"VectorDB has {vector_db_count} documents")
                 
                 # Add sync button
-                if st.sidebar.button("🔄 Sync with VectorDB"):
+                if st.sidebar.button("🔄 Sync UI with VectorDB"):
                     self._sync_with_vector_db()
             else:
-                st.sidebar.metric("Total Log Entries", file_count)
+                st.sidebar.metric("UI Data", f"{ui_count} logs")
+                st.sidebar.info("File-based data (no VectorDB)")
             
             # Data statistics
             if 'timestamp' in st.session_state.logs_df.columns:
                 date_range = st.session_state.logs_df['timestamp'].agg(['min', 'max'])
                 st.sidebar.metric("Date Range", f"{date_range['min'].date()} to {date_range['max'].date()}")
             
+            # Show data source type
+            if hasattr(st.session_state, 'data_source'):
+                st.sidebar.info(f"Source: {st.session_state.data_source}")
+            
             # Clear data button
             if st.sidebar.button("🗑️ Clear Data"):
                 st.session_state.logs_df = pd.DataFrame()
                 st.session_state.lstm_model = None
+                if hasattr(st.session_state, 'data_source'):
+                    del st.session_state.data_source
                 st.rerun()
+        else:
+            st.sidebar.info("No data loaded")
+            st.sidebar.info("Use 'Load All Logs' to get started")
     
     def render_data_upload_section(self):
         """Render data upload and ingestion section"""
@@ -209,6 +226,7 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                     # Apply feature engineering
                     df = self.feature_engineer.engineer_all_features(df)
                     st.session_state.logs_df = df
+                    st.session_state.data_source = "Uploaded Files"
                     
                     st.success(f"✅ Successfully processed {len(df)} log entries from {len(uploaded_files)} files")
                     st.rerun()
@@ -219,70 +237,54 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                 st.error(f"❌ Error processing files: {str(e)}")
     
     def load_all_logs(self):
-        """Load all available OpenStack log files (optimized one-time process)"""
-        with st.spinner("Loading all OpenStack logs (this may take a few minutes)..."):
+        """Load all available OpenStack log files with cache and VectorDB sync"""
+        with st.spinner("Loading all OpenStack logs..."):
             try:
-                # First, check if VectorDB already has data
-                if hasattr(st.session_state, 'vector_db') and st.session_state.vector_db:
-                    try:
-                        vector_db_count = st.session_state.vector_db.collection.count()
-                        if vector_db_count > 0:
-                            st.info(f"📊 VectorDB already has {vector_db_count} documents loaded")
-                            
-                            # Load data from VectorDB instead of file system
-                            df = self._load_logs_from_vector_db()
-                            
-                            if not df.empty:
-                                # Apply feature engineering
-                                with st.spinner("Applying feature engineering..."):
-                                    df = self.feature_engineer.engineer_all_features(df)
-                                
-                                # Store in session state
-                                st.session_state.logs_df = df
-                                
-                                # Show success message
-                                st.success(f"✅ Successfully loaded {len(df)} log entries from VectorDB")
-                                st.info("🎯 UI now uses the same data source as RCA analysis")
-                                
-                                # Show detailed statistics
-                                self._show_loading_success(df, [f"VectorDB ({vector_db_count} documents)"])
-                                
-                                st.rerun()
-                                return
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not load from VectorDB: {e}")
-                
-                # Fallback to file system loading
-                # Step 1: Discover all log files
-                log_files = self._discover_all_log_files()
-                
-                if not log_files:
-                    st.error("❌ No log files found. Please ensure log files are in the project directory.")
-                    st.info("Expected locations: logs/ directory or root directory")
+                # Step 1: Check VectorDB first (highest priority - most up-to-date)
+                vector_db_df = self._try_load_from_vector_db()
+                if not vector_db_df.empty:
+                    st.session_state.logs_df = vector_db_df
+                    st.session_state.data_source = "VectorDB"
+                    st.success(f"✅ Loaded {len(vector_db_df)} logs from VectorDB")
+                    st.info("🎯 UI synced with VectorDB - using same data source as RCA analysis")
+                    self._show_loading_success(vector_db_df, ["VectorDB"])
+                    st.rerun()
                     return
                 
-                st.info(f"📁 Found {len(log_files)} log files to process")
+                # Step 2: Try cache (fast, but may be outdated)
+                cache_df = self._try_load_from_cache()
+                if not cache_df.empty:
+                    st.session_state.logs_df = cache_df
+                    st.session_state.data_source = "Cache"
+                    st.success(f"✅ Loaded {len(cache_df)} logs from cache")
+                    st.info("⚡ Fast load from cache - consider syncing with VectorDB for latest data")
+                    
+                    # Offer to sync with VectorDB if available
+                    if self._check_vector_db_available():
+                        if st.button("🔄 Sync with VectorDB for latest data"):
+                            self._sync_with_vector_db()
+                            return
+                    
+                    self._show_loading_success(cache_df, ["Cache"])
+                    st.rerun()
+                    return
                 
-                # Step 2: Load and parse logs (without VectorDB storage)
-                df = self._load_logs_without_vector_db(log_files)
+                # Step 3: Load from files (slowest, but always works)
+                st.info("📁 Loading from log files (this may take a few minutes)...")
+                file_df = self._load_from_files()
                 
-                if not df.empty:
-                    # Step 3: Apply feature engineering
-                    with st.spinner("Applying feature engineering..."):
-                        df = self.feature_engineer.engineer_all_features(df)
+                if not file_df.empty:
+                    st.session_state.logs_df = file_df
+                    st.session_state.data_source = "Log Files"
+                    st.success(f"✅ Loaded {len(file_df)} logs from files")
                     
-                    # Step 4: Store in session state
-                    st.session_state.logs_df = df
+                    # Offer VectorDB setup
+                    self._offer_vector_db_setup(file_df)
                     
-                    # Step 5: Show success message with detailed stats
-                    self._show_loading_success(df, log_files)
-                    
-                    # Step 6: Offer VectorDB setup (one-time)
-                    self._offer_vector_db_setup(df)
-                    
+                    self._show_loading_success(file_df, ["Log Files"])
                     st.rerun()
                 else:
-                    st.error("❌ No valid log entries found in the discovered files")
+                    st.error("❌ No valid log entries found")
                     
             except Exception as e:
                 st.error(f"❌ Error loading logs: {str(e)}")
@@ -367,6 +369,7 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                     
                     # Store in session state
                     st.session_state.logs_df = df
+                    st.session_state.data_source = "VectorDB (Synced)"
                     
                     st.success(f"✅ Successfully synced with VectorDB! {len(df)} logs loaded")
                     st.info("🎯 UI now uses the same data source as RCA analysis")
@@ -406,7 +409,7 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                 logs_data.append(log_entry)
             
             df = pd.DataFrame(logs_data)
-            
+                    
             # Convert timestamp to datetime if needed
             if 'timestamp' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
                 df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -420,6 +423,84 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
             
         except Exception as e:
             st.error(f"❌ Failed to load from VectorDB: {e}")
+            return pd.DataFrame()
+    
+    def _check_vector_db_available(self):
+        """Check if VectorDB is available and has data"""
+        try:
+            if hasattr(st.session_state, 'vector_db') and st.session_state.vector_db:
+                stats = st.session_state.vector_db.get_collection_stats()
+                return stats['total_documents'] > 0
+        except:
+            pass
+        return False
+    
+    def _try_load_from_vector_db(self):
+        """Try to load logs from VectorDB"""
+        try:
+            # Initialize VectorDB if not already done
+            if not hasattr(st.session_state, 'vector_db') or st.session_state.vector_db is None:
+                from services.vector_db_service import VectorDBService
+                st.session_state.vector_db = VectorDBService()
+            
+            # Check if VectorDB has data
+            stats = st.session_state.vector_db.get_collection_stats()
+            if stats['total_documents'] == 0:
+                return pd.DataFrame()
+            
+            # Load from VectorDB
+            df = self._load_logs_from_vector_db()
+            if not df.empty:
+                # Apply feature engineering
+                df = self.feature_engineer.engineer_all_features(df)
+                return df
+                
+        except Exception as e:
+            st.warning(f"⚠️ Could not load from VectorDB: {e}")
+        
+        return pd.DataFrame()
+    
+    def _try_load_from_cache(self):
+        """Try to load logs from cache"""
+        try:
+            from utils.log_cache import LogCache
+            cache = LogCache()
+            
+            # Try to load from cache for the logs directory
+            cache_df = cache.get_cached_logs('logs/')
+            
+            if not cache_df.empty:
+                return cache_df
+                
+        except Exception as e:
+            st.warning(f"⚠️ Could not load from cache: {e}")
+        
+        return pd.DataFrame()
+    
+    def _load_from_files(self):
+        """Load logs from files and cache them"""
+        try:
+            # Discover log files
+            log_files = self._discover_all_log_files()
+            
+            if not log_files:
+                st.error("❌ No log files found. Please ensure log files are in the project directory.")
+                st.info("Expected locations: logs/ directory or root directory")
+                return pd.DataFrame()
+            
+            st.info(f"📁 Found {len(log_files)} log files to process")
+            
+            # Use cache system to load and cache files
+            from utils.log_cache import LogCache
+            cache = LogCache()
+            
+            # Load from files and cache automatically
+            df = cache.get_cached_logs('logs/')
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Error loading from files: {e}")
             return pd.DataFrame()
     
     def _show_loading_success(self, df, log_files):
@@ -482,7 +563,8 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                 
                 # Store VectorDB reference in session state
                 st.session_state.vector_db = vector_db
-                
+                st.session_state.data_source = "VectorDB (Setup Complete)"
+                    
             except Exception as e:
                 st.error(f"❌ VectorDB setup failed: {e}")
                 st.info("You can still use RCA analysis without VectorDB (fast mode).")

@@ -54,13 +54,7 @@ class LogIngestionManager:
                 df['file_size'] = os.path.getsize(file_path)
                 logger.info(f"Successfully ingested {len(df)} log entries from {file_path}")
                 
-                # NEW: Store logs in vector database
-                if self.vector_db:
-                    try:
-                        logs_added = self.vector_db.add_logs(df, enable_chunking=self.enable_chunking)
-                        logger.info(f"Added {logs_added} logs to vector database")
-                    except Exception as e:
-                        logger.error(f"Failed to add logs to vector database: {e}")
+                # REMOVED: Don't add to VectorDB here - will be added in ingest_multiple_files
                 
                 return df
             

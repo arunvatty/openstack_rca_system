@@ -13,7 +13,9 @@ class Config:
     
     # File paths
     DATA_DIR = 'logs'
-    MODELS_DIR = 'saved_models'
+    MODELS_DIR = 'models'
+    CACHE_DIR = 'data/cache'
+    VECTOR_DB_DIR = 'data/vector_db'
     
     # LSTM Model Configuration
     LSTM_CONFIG = {
@@ -44,17 +46,19 @@ class Config:
     RCA_CONFIG = {
         'similarity_threshold': 0.7,
         'max_context_logs': 50,
-        'time_window_minutes': 30
+        'time_window_minutes': 30,
+        'historical_context_size': 10,  # Number of historical logs to include in context
+        'max_historical_context_chars': 2000  # Maximum characters for historical context
     }
     
     # NEW: Vector DB Configuration
     VECTOR_DB_CONFIG = {
         'type': 'chroma',
-        'embedding_model': 'all-MiniLM-L6-v2',
+        'embedding_model': 'all-MiniLM-L12-v2',  # Upgraded to L12 for better semantic understanding
         'collection_name': 'openstack_logs',
         'similarity_threshold': 0.7,
         'top_k_results': 20,
-        'persist_directory': 'chroma_db',
+        'persist_directory': VECTOR_DB_DIR,
         
         # Additional parameters for enhanced configuration
         'chunk_size': 512,  # For text chunking if needed

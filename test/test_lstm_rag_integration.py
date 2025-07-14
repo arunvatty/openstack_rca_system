@@ -13,8 +13,8 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from data.log_ingestion import LogIngestionManager
-from models.rca_analyzer import RCAAnalyzer
-from models.lstm_classifier import LSTMLogClassifier
+from lstm.rca_analyzer import RCAAnalyzer
+from lstm.lstm_classifier import LSTMLogClassifier
 from config.config import Config
 
 # Set up logging

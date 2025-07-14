@@ -14,8 +14,8 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from models.rca_analyzer import RCAAnalyzer
-from models.lstm_classifier import LSTMLogClassifier
+from lstm.rca_analyzer import RCAAnalyzer
+from lstm.lstm_classifier import LSTMLogClassifier
 from utils.log_cache import LogCache
 from config.config import Config
 
@@ -38,7 +38,7 @@ def test_hybrid_vs_original():
     log_cache = LogCache()
     
     # Load LSTM model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
+    model_path = os.path.join('data/model', 'lstm_log_classifier.keras')
     lstm_model = None
     
     if os.path.exists(model_path):
@@ -186,7 +186,7 @@ def test_hybrid_features():
     log_cache = LogCache()
     
     # Load LSTM model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
+    model_path = os.path.join('data/model', 'lstm_log_classifier.keras')
     lstm_model = None
     
     if os.path.exists(model_path):

@@ -21,8 +21,8 @@ sys.path.insert(0, str(project_root))
 from config.config import Config
 from data.log_ingestion import LogIngestionManager
 from data.preprocessing import LogPreprocessor
-from models.lstm_classifier import LSTMLogClassifier
-from models.rca_analyzer import RCAAnalyzer
+from lstm.lstm_classifier import LSTMLogClassifier
+from lstm.rca_analyzer import RCAAnalyzer
 from utils.feature_engineering import FeatureEngineer
 
 # Configure logging
@@ -68,7 +68,6 @@ def train_model_pipeline(clean_vector_db: bool = False):
             logger.info("📊 ChromaDB is already empty, no cleaning needed")
         else:
             logger.info("📊 ChromaDB will retain existing data (use --clean-vector-db to reset)")
-            
     except Exception as e:
         logger.warning(f"Failed to check ChromaDB status: {e}")
     
@@ -146,7 +145,7 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mo
     log_cache = LogCache()
     
     # Load or train LSTM model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
+    model_path = os.path.join('data/model', 'lstm_log_classifier.keras')
     lstm_model = None
     
     if os.path.exists(model_path):
@@ -250,7 +249,7 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
     log_cache = LogCache()
     
     # Load or train LSTM model
-    model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
+    model_path = os.path.join('data/model', 'lstm_log_classifier.keras')
     lstm_model = None
     
     if os.path.exists(model_path):
@@ -277,6 +276,8 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
     # Define test queries
     if custom_query:
         test_queries = [custom_query]
+        # For custom query, show actual results
+        show_results = True
     else:
         test_queries = [
             "Instance launch failures",
@@ -285,6 +286,7 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
             "Resource allocation failures",
             "Service startup errors"
         ]
+        show_results = False
     
     print("\n" + "="*60)
     print("MODEL PERFORMANCE TESTING")
@@ -335,6 +337,49 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
                 print(f"    Fast:   {fast_time:.2f}s ({fast_results.get('relevant_logs_count', 0)} logs)")
                 print(f"    Speedup: {hybrid_time/fast_time:.1f}x")
                 
+                # Show actual results for custom query (only on first iteration)
+                if show_results and i == 0:
+                    print(f"\n📋 HYBRID MODE RESULTS:")
+                    print("="*50)
+                    print(f"Issue: {results.get('issue_description', query)}")
+                    print(f"Category: {results.get('issue_category', 'unknown')}")
+                    print(f"Relevant Logs: {results.get('relevant_logs_count', 0)}")
+                    print(f"Analysis Mode: {results.get('analysis_mode', 'hybrid')}")
+                    
+                    # Display performance metrics
+                    if 'performance_metrics' in results:
+                        metrics = results['performance_metrics']
+                        print(f"\nPerformance Metrics:")
+                        print(f"- Processing Time: {metrics.get('processing_time', 0):.2f} seconds")
+                        print(f"- Total Logs: {metrics.get('total_logs', 0)}")
+                        print(f"- Filtered Logs: {metrics.get('filtered_logs', 0)}")
+                        print(f"- LSTM Available: {metrics.get('lstm_available', False)}")
+                        print(f"- Vector DB Available: {metrics.get('vector_db_available', False)}")
+                    
+                    # Show prompt only (not the full RCA response) - ONLY ONCE for hybrid mode
+                    # REMOVED: Duplicate prompt printing since LSTM analyzer already logs it
+                    # if 'prompt' in results and results['prompt']:
+                    #     print(f"\n📄 PROMPT SENT TO LLM:")
+                    #     print("="*50)
+                    #     print(results['prompt'][:500] + "..." if len(results['prompt']) > 500 else results['prompt'])
+                    
+                    # Display top filtered logs with scores
+                    if 'filtered_logs' in results and not results['filtered_logs'].empty:
+                        print(f"\n🔍 TOP RELEVANT LOGS (showing first 5):")
+                        top_logs = results['filtered_logs'].head(5)
+                        for _, log in top_logs.iterrows():
+                            score = log.get('combined_score', log.get('lstm_importance', 0))
+                            print(f"- [{log.get('level', 'INFO')}] {log.get('service_type', 'unknown')}: {log.get('message', '')[:100]}... (Score: {score:.3f})")
+                    
+                    print(f"\n📋 FAST MODE RESULTS:")
+                    print("="*50)
+                    print(f"Issue: {fast_results.get('issue_description', query)}")
+                    print(f"Category: {fast_results.get('issue_category', 'unknown')}")
+                    print(f"Relevant Logs: {fast_results.get('relevant_logs_count', 0)}")
+                    print(f"Analysis Mode: {fast_results.get('analysis_mode', 'fast')}")
+                    
+                    # REMOVED: No longer showing fast mode prompt to avoid duplication
+                
             except Exception as e:
                 logger.error(f"Test iteration failed: {e}")
                 continue
@@ -352,8 +397,8 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
             
             all_metrics.extend(query_metrics)
     
-    # Overall summary
-    if all_metrics:
+    # Overall summary (only show if not custom query)
+    if all_metrics and not show_results:
         print("\n" + "="*60)
         print("OVERALL PERFORMANCE SUMMARY")
         print("="*60)
@@ -460,8 +505,13 @@ def main():
                 
             elif args.action == 'reset':
                 logger.info("Resetting ChromaDB database...")
-                vector_db._reset_chroma_db()
-                logger.info("✅ ChromaDB database reset successfully")
+                from services.vector_db_service import VectorDBService
+                reset_success = VectorDBService.static_reset_chroma_db(Config.VECTOR_DB_CONFIG)
+                if reset_success:
+                    logger.info("✅ ChromaDB database reset successfully")
+                else:
+                    logger.error("❌ ChromaDB database reset failed - using in-memory fallback")
+                    logger.info("💡 Try running the reset command again, or check ChromaDB installation")
                 
             elif args.action == 'ingest':
                 logger.info("Ingesting logs into ChromaDB collection...")
@@ -499,7 +549,7 @@ def main():
                 
         except Exception as e:
             logger.error(f"Vector DB operation failed: {e}")
-    
+        
     elif args.mode == 'train':
         logger.info("Starting model training...")
         

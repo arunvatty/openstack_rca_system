@@ -39,13 +39,14 @@ class RCAAnalyzer:
         
         # Issue categorization patterns
         self.issue_patterns = {
-            'resource_shortage': ['resource', 'memory', 'disk', 'cpu', 'allocation', 'insufficient'],
-            'network_issues': ['network', 'connection', 'timeout', 'unreachable', 'dns'],
-            'authentication': ['auth', 'authentication', 'token', 'credential', 'permission'],
-            'service_failure': ['service', 'nova', 'keystone', 'glance', 'neutron', 'failed'],
-            'instance_issues': ['instance', 'vm', 'spawn', 'launch', 'terminate', 'destroy'],
-            'database': ['database', 'mysql', 'postgresql', 'connection', 'query'],
-            'storage': ['storage', 'volume', 'cinder', 'swift', 'object', 'block']
+            'resource_shortage': ['resource', 'memory', 'disk', 'cpu', 'allocation', 'insufficient', 'space left', 'no space', 'allocation failure', 'memory allocation'],
+            'network_issues': ['network', 'connection', 'timeout', 'unreachable', 'dns', 'nova-conductor', 'messaging', 'rpc'],
+            'authentication': ['auth', 'authentication', 'token', 'credential', 'permission', 'denied', 'unauthorized'],
+            'service_failure': ['service', 'nova', 'keystone', 'glance', 'neutron', 'failed', 'failure', 'exception', 'error'],
+            'instance_issues': ['instance', 'vm', 'spawn', 'launch', 'terminate', 'destroy', 'state', 'update instance'],
+            'database': ['database', 'mysql', 'postgresql', 'connection', 'query', 'operationalerror', 'db'],
+            'storage': ['storage', 'volume', 'cinder', 'swift', 'object', 'block', 'vif', 'plugging'],
+            'timeout_issues': ['timeout', 'timed out', 'connection timeout', 'nova-conductor', 'messaging timeout', 'rpc timeout']
         }
         
         # Performance metrics
@@ -338,18 +339,44 @@ class RCAAnalyzer:
             return logs_df.copy()
     
     def _vector_db_search(self, lstm_filtered_logs: pd.DataFrame, issue_description: str) -> List[Dict]:
-        """Search Vector DB for semantically similar logs"""
+        """Search Vector DB for semantically similar logs within LSTM-filtered results"""
         if not self.vector_db or lstm_filtered_logs.empty:
             return []
         
         try:
-            # Search Vector DB without metadata filter (fixes the list issue)
+            # Get the original indices of LSTM-filtered logs to constrain VectorDB search
+            lstm_indices = set(lstm_filtered_logs.index.tolist())
+            
+            # Convert indices to strings for metadata filtering
+            lstm_index_strings = [str(idx) for idx in lstm_indices]
+            
+            # Use correct ChromaDB metadata filtering syntax
+            # ChromaDB uses 'where' clause with field names, not nested dictionaries
+            where_clause = {'original_index': {'$in': lstm_index_strings}}
+            
             similar_logs = self.vector_db.search_similar_logs(
                 query=issue_description,
-                top_k=50
+                top_k=50,
+                filter_metadata=where_clause
             )
             
-            logger.info(f"Vector DB found {len(similar_logs)} similar logs")
+            logger.info(f"Vector DB found {len(similar_logs)} similar logs within {len(lstm_filtered_logs)} LSTM-filtered logs")
+            
+            # Log breakdown of VectorDB results by level
+            if similar_logs:
+                level_counts = {}
+                for log in similar_logs:
+                    level = log['metadata'].get('level', 'UNKNOWN')
+                    level_counts[level] = level_counts.get(level, 0) + 1
+                logger.info(f"VectorDB results by level: {level_counts}")
+                
+                # Check if ERROR logs are in VectorDB results
+                error_count = level_counts.get('ERROR', 0)
+                if error_count > 0:
+                    logger.info(f"✅ VectorDB found {error_count} ERROR logs in search results")
+                else:
+                    logger.warning("⚠️ No ERROR logs found in VectorDB search results")
+            
             return similar_logs
             
         except Exception as e:
@@ -358,45 +385,101 @@ class RCAAnalyzer:
     
     def _combine_and_rank_results(self, lstm_filtered_logs: pd.DataFrame, vector_results: List[Dict]) -> pd.DataFrame:
         """Combine LSTM importance and Vector DB similarity scores"""
-        # Since we're not filtering by original_index anymore, we'll use a simpler approach
-        # Just return the LSTM filtered logs with TF-IDF similarity if available
         if lstm_filtered_logs.empty:
             return lstm_filtered_logs
         
-        # Add TF-IDF similarity if not already present
-        if 'tfidf_similarity' not in lstm_filtered_logs.columns:
-            try:
-                # Calculate TF-IDF similarity for the filtered logs
-                texts = lstm_filtered_logs['message'].fillna('').astype(str).tolist()
+        try:
+            # Create a mapping from VectorDB results to LSTM filtered logs
+            # VectorDB results contain original_index in metadata
+            vector_logs_by_index = {}
+            for vector_log in vector_results:
+                original_index = vector_log['metadata'].get('original_index')
+                if original_index:
+                    try:
+                        index = int(original_index)
+                        vector_logs_by_index[index] = vector_log
+                    except (ValueError, TypeError):
+                        continue
+            
+            # Add VectorDB similarity scores to LSTM filtered logs
+            lstm_filtered_logs = lstm_filtered_logs.copy()
+            lstm_filtered_logs['vector_similarity'] = 0.0  # Default similarity
+            
+            for idx in lstm_filtered_logs.index:
+                if idx in vector_logs_by_index:
+                    vector_log = vector_logs_by_index[idx]
+                    distance = vector_log['distance']
+                    similarity = vector_log['similarity']
+                    
+                    # FIX: Clamp similarity to non-negative values for RCA analysis
+                    # Negative similarity doesn't make sense - it means the log is semantically opposite
+                    # For RCA, we want to treat this as "no semantic match" rather than "negative match"
+                    similarity = max(0.0, similarity)
+                    
+                    lstm_filtered_logs.loc[idx, 'vector_similarity'] = similarity
+                    
+                    # DEBUG: Show distance and similarity for ERROR logs
+                    if 'level' in lstm_filtered_logs.columns and lstm_filtered_logs.loc[idx, 'level'].upper() == 'ERROR':
+                        message = lstm_filtered_logs.loc[idx, 'message'][:100]
+                        logger.info(f"🔍 DEBUG: ERROR log VectorDB - Distance: {distance:.3f}, Original Similarity: {vector_log['similarity']:.3f}, Clamped: {similarity:.3f} - {message}")
+            
+            # DEBUG: Show some INFO log scores for comparison
+            info_logs = lstm_filtered_logs[lstm_filtered_logs['level'].str.upper() == 'INFO'].head(3)
+            for idx, log in info_logs.iterrows():
+                if idx in vector_logs_by_index:
+                    vector_log = vector_logs_by_index[idx]
+                    distance = vector_log['distance']
+                    similarity = vector_log['similarity']
+                    message = log['message'][:100]
+                    logger.info(f"🔍 DEBUG: INFO log VectorDB - Distance: {distance:.3f}, Similarity: {similarity:.3f} - {message}")
+            
+            # Calculate combined score with special handling for ERROR logs
+            if 'lstm_importance' in lstm_filtered_logs.columns:
+                # Prioritize LSTM importance for RCA analysis (LSTM learned what's important)
+                lstm_filtered_logs['combined_score'] = (
+                    lstm_filtered_logs['lstm_importance'] * 0.7 + 
+                    lstm_filtered_logs['vector_similarity'] * 0.3
+                )
                 
-                if not hasattr(self.tfidf_vectorizer, 'vocabulary_'):
-                    self.tfidf_vectorizer.fit(texts)
+                # DEBUG: Print ERROR log scores to understand why they're not ranking high
+                if 'level' in lstm_filtered_logs.columns:
+                    error_logs = lstm_filtered_logs[lstm_filtered_logs['level'].str.upper() == 'ERROR']
+                    if not error_logs.empty:
+                        logger.info("🔍 DEBUG: ERROR log scores:")
+                        for idx, log in error_logs.iterrows():
+                            lstm_score = log.get('lstm_importance', 0)
+                            vector_score = log.get('vector_similarity', 0)
+                            combined_score = log.get('combined_score', 0)
+                            message = log.get('message', '')[:100]
+                            logger.info(f"  ERROR: LSTM={lstm_score:.3f}, Vector={vector_score:.3f}, Combined={combined_score:.3f} - {message}")
                 
-                # For now, just return LSTM filtered logs sorted by importance
-                if 'lstm_importance' in lstm_filtered_logs.columns:
-                    result_df = lstm_filtered_logs.sort_values('lstm_importance', ascending=False)
-                else:
-                    result_df = lstm_filtered_logs
+                # Sort by combined score (highest first)
+                result_df = lstm_filtered_logs.sort_values('combined_score', ascending=False)
                 
-                logger.info(f"Simplified scoring completed: {len(result_df)} results")
+                # Log the top results by level
+                if 'level' in result_df.columns:
+                    top_50 = result_df.head(50)
+                    level_counts = top_50['level'].value_counts()
+                    logger.info(f"Top 50 results by level: {dict(level_counts)}")
+                    
+                    # Check if ERROR logs are in top results
+                    error_count = level_counts.get('ERROR', 0)
+                    if error_count > 0:
+                        logger.info(f"✅ {error_count} ERROR logs in top 50 results")
+                    else:
+                        logger.warning("⚠️ No ERROR logs in top 50 results")
+                
+                logger.info(f"Combined scoring completed: {len(result_df)} results")
+                return result_df.head(50)
+            else:
+                # Fallback: sort by Vector similarity only
+                result_df = lstm_filtered_logs.sort_values('vector_similarity', ascending=False)
+                logger.info(f"Vector-only scoring completed: {len(result_df)} results")
                 return result_df.head(50)
                 
-            except Exception as e:
-                logger.warning(f"TF-IDF calculation failed: {e}")
-                return lstm_filtered_logs.head(50)
-        
-        # If TF-IDF similarity is already present, combine with LSTM importance
-        if 'lstm_importance' in lstm_filtered_logs.columns:
-            lstm_filtered_logs['combined_score'] = (
-                lstm_filtered_logs['lstm_importance'] * 0.7 + 
-                lstm_filtered_logs['tfidf_similarity'] * 0.3
-            )
-            result_df = lstm_filtered_logs.sort_values('combined_score', ascending=False)
-        else:
-            result_df = lstm_filtered_logs.sort_values('tfidf_similarity', ascending=False)
-        
-        logger.info(f"Combined scoring completed: {len(result_df)} results")
-        return result_df.head(50)
+        except Exception as e:
+            logger.warning(f"Combined scoring failed: {e}, using LSTM filtered logs")
+            return lstm_filtered_logs.head(50)
     
     def _explain_ranking(self, lstm_score: float, vector_score: float) -> str:
         """Explain why a log was ranked as it was"""
@@ -458,9 +541,23 @@ class RCAAnalyzer:
         """Categorize the issue based on description"""
         issue_lower = issue_description.lower()
         
-        for category, keywords in self.issue_patterns.items():
-            if any(keyword in issue_lower for keyword in keywords):
-                return category
+        # Priority order for categorization (most specific first)
+        priority_categories = [
+            'timeout_issues',  # Check timeout issues first
+            'resource_shortage',  # Check resource issues before service_failure
+            'network_issues',
+            'service_failure',
+            'authentication',
+            'instance_issues',
+            'database',
+            'storage'
+        ]
+        
+        for category in priority_categories:
+            if category in self.issue_patterns:
+                keywords = self.issue_patterns[category]
+                if any(keyword in issue_lower for keyword in keywords):
+                    return category
         
         return 'general'
     
@@ -485,7 +582,14 @@ class RCAAnalyzer:
             (r'no valid host', 'No Valid Host Found'),
             (r'terminating.*instance', 'Instance Termination Started'),
             (r'error.*connection', 'Connection Error'),
-            (r'timeout', 'Timeout Occurred')
+            (r'timeout', 'Timeout Occurred'),
+            (r'nova-conductor.*timeout', 'Nova-Conductor Timeout'),
+            (r'connection.*nova-conductor.*timeout', 'Nova-Conductor Connection Timeout'),
+            (r'failed.*update.*instance.*state', 'Instance State Update Failed'),
+            (r'messaging.*timeout', 'Messaging Timeout'),
+            (r'rpc.*timeout', 'RPC Timeout'),
+            (r'connection.*timed.*out', 'Connection Timed Out'),
+            (r'update.*instance.*state.*failed', 'Instance State Update Failed')
         ]
         
         for _, log in sorted_logs.iterrows():
@@ -524,6 +628,10 @@ class RCAAnalyzer:
             patterns['resource_patterns'] = self._analyze_resource_patterns(logs_df)
         elif issue_category == 'network_issues':
             patterns['network_patterns'] = self._analyze_network_patterns(logs_df)
+        elif issue_category == 'timeout_issues':
+            patterns['timeout_patterns'] = self._analyze_network_patterns(logs_df)  # Reuse network patterns for timeouts
+        elif issue_category == 'service_failure':
+            patterns['service_patterns'] = self._analyze_network_patterns(logs_df)  # Include timeout patterns for service failures
         
         return patterns
     
@@ -541,7 +649,10 @@ class RCAAnalyzer:
         """Analyze network-related patterns"""
         network_patterns = {
             'connection_failures': len(logs_df[logs_df['message'].str.contains('connection|connect', case=False, na=False)]),
-            'timeout_issues': len(logs_df[logs_df['message'].str.contains('timeout', case=False, na=False)]),
+            'timeout_issues': len(logs_df[logs_df['message'].str.contains('timeout|timed out', case=False, na=False)]),
+            'nova_conductor_timeouts': len(logs_df[logs_df['message'].str.contains('nova-conductor.*timeout', case=False, na=False)]),
+            'messaging_timeouts': len(logs_df[logs_df['message'].str.contains('messaging.*timeout|rpc.*timeout', case=False, na=False)]),
+            'instance_state_update_failures': len(logs_df[logs_df['message'].str.contains('failed.*update.*instance.*state|update.*instance.*state.*failed', case=False, na=False)]),
             'dns_issues': len(logs_df[logs_df['message'].str.contains('dns|hostname', case=False, na=False)]),
             'network_unreachable': len(logs_df[logs_df['message'].str.contains('unreachable|network', case=False, na=False)])
         }
@@ -625,7 +736,11 @@ Focus on actionable insights and technical details.
         if self.vector_db:
             try:
                 logger.info("🔍 Attempting to get historical context from VectorDB...")
-                historical_context = self.vector_db.get_context_for_issue(issue_description, top_k=5)
+                # Get historical context from VectorDB
+                historical_context = self.vector_db.get_context_for_issue(
+                    issue_description, 
+                    top_k=Config.RCA_CONFIG['historical_context_size']
+                )
                 if historical_context:
                     logger.info(f"✅ Found historical context: {len(historical_context)} characters")
                     context_parts.append("Historical Context (Similar Issues):")
@@ -714,6 +829,23 @@ Focus on actionable insights and technical details.
                 "Check DNS resolution",
                 "Monitor network timeouts",
                 "Review network configuration"
+            ])
+        elif issue_category == 'timeout_issues':
+            recommendations.extend([
+                "Check nova-conductor service status and connectivity",
+                "Verify messaging/RPC timeout configurations",
+                "Monitor system load and resource usage",
+                "Review network latency between compute and conductor nodes",
+                "Check for database connection issues affecting conductor",
+                "Consider increasing timeout values if appropriate",
+                "Verify message queue (RabbitMQ/ZeroMQ) health"
+            ])
+        elif issue_category == 'service_failure':
+            recommendations.extend([
+                "Check service status and restart if necessary",
+                "Verify service dependencies and connectivity",
+                "Review service logs for additional errors",
+                "Monitor system resources for service constraints"
             ])
         elif issue_category == 'authentication':
             recommendations.extend([

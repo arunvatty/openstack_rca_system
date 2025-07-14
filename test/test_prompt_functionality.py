@@ -11,7 +11,7 @@ from datetime import datetime
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from models.rca_analyzer import RCAAnalyzer
+from lstm.rca_analyzer import RCAAnalyzer
 from config.config import Config
 
 def create_sample_logs():

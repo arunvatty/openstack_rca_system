@@ -9,16 +9,21 @@ import pickle
 
 from data.log_ingestion import LogIngestionManager
 from utils.feature_engineering import FeatureEngineer
+from config.config import Config
 
 logger = logging.getLogger(__name__)
 
 class LogCache:
-    """Cache system for log data to avoid repeated file loading"""
+    """Cache for processed log data to avoid repeated file loading"""
     
-    def __init__(self, cache_dir: str = 'cache', max_cache_age_hours: int = 24):
+    def __init__(self, cache_dir: str = None, max_cache_age_hours: int = 24):
+        # Use config cache directory if not specified
+        if cache_dir is None:
+            cache_dir = Config.CACHE_DIR
+            
         self.cache_dir = Path(cache_dir)
         self.max_cache_age = timedelta(hours=max_cache_age_hours)
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         # Cache metadata
         self.cache_metadata = {}

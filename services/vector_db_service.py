@@ -157,53 +157,23 @@ class VectorDBService:
         
         return truncated + "..."
     
-    def _reset_chroma_db(self):
-        """Reset ChromaDB database completely by deleting and recreating"""
+    @staticmethod
+    def static_reset_chroma_db(config):
+        """Static method to reset ChromaDB database completely by deleting and recreating the directory."""
         try:
-            # Close any existing connections
-            if hasattr(self, 'client') and self.client:
-                try:
-                    self.client.delete_collection(self.collection_name)
-                    logger.info(f"Deleted existing collection: {self.collection_name}")
-                except Exception as e:
-                    logger.info(f"Collection {self.collection_name} was already deleted or didn't exist")
-            
-            # Completely remove the ChromaDB directory to fix schema issues
             import shutil
-            persist_dir = self.config['persist_directory']
+            import os
+            persist_dir = config['persist_directory']
             if os.path.exists(persist_dir):
                 logger.info(f"Removing ChromaDB directory: {persist_dir}")
                 shutil.rmtree(persist_dir)
                 logger.info("✅ ChromaDB directory removed completely")
-            
-            # Recreate the directory
             os.makedirs(persist_dir, exist_ok=True)
             logger.info(f"✅ Recreated ChromaDB directory: {persist_dir}")
-            
-            # Reinitialize ChromaDB client
-            import chromadb
-            from chromadb.config import Settings
-            
-            self.client = chromadb.PersistentClient(
-                path=persist_dir,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
-            
-            # Create new collection
-            self.collection = self.client.create_collection(
-                name=self.collection_name,
-                metadata={"description": "OpenStack log embeddings for RCA"}
-            )
-            logger.info(f"✅ Recreated ChromaDB collection: {self.collection_name}")
-            self.use_chromadb = True
-            
+            return True
         except Exception as e:
             logger.error(f"Failed to reset ChromaDB: {e}")
-            logger.info("Falling back to in-memory vector database")
-            self._initialize_in_memory_db()
+            return False
     
     def _initialize_database(self):
         """Initialize database with ChromaDB fallback to in-memory"""
@@ -212,20 +182,13 @@ class VectorDBService:
         # Try ChromaDB first
         try:
             import chromadb
-            from chromadb.config import Settings
             
             # Create persist directory if it doesn't exist
             persist_dir = self.config['persist_directory']
             os.makedirs(persist_dir, exist_ok=True)
             
-            # Initialize ChromaDB client
-            self.client = chromadb.PersistentClient(
-                path=persist_dir,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
+            # Initialize ChromaDB client with new non-deprecated syntax
+            self.client = chromadb.PersistentClient(path=persist_dir)
             
             # Try to get or create collection
             try:
@@ -252,7 +215,7 @@ class VectorDBService:
                         logger.warning(f"Failed to create ChromaDB collection: {create_error}")
                         logger.info("Falling back to in-memory vector database")
                         self._initialize_in_memory_db()
-                        
+                
         except Exception as e:
             logger.warning(f"ChromaDB not available: {e}")
             logger.info("Using in-memory vector database")
@@ -297,10 +260,12 @@ class VectorDBService:
         return log_text
     
     def add_logs(self, logs_df: pd.DataFrame, enable_chunking: bool = False) -> int:
-        """Add logs to the vector database"""
+        """Add logs to the vector database with robust deduplication"""
         if logs_df.empty:
             logger.warning("No logs to add to vector database")
             return 0
+        
+        logger.info(f"Starting VectorDB ingestion: {len(logs_df)} logs to process")
         
         try:
             # Prepare data for ChromaDB
@@ -314,12 +279,45 @@ class VectorDBService:
                 existing_results = self.collection.get()
                 if existing_results['ids']:
                     existing_ids = set(existing_results['ids'])
+                    logger.info(f"Found {len(existing_ids)} existing documents in VectorDB")
             except Exception:
+                logger.info("No existing documents found in VectorDB")
                 pass  # Collection might be empty
             
+            # Track duplicates for reporting
+            duplicates_found = 0
+            processed_count = 0
+            
             for idx, row in logs_df.iterrows():
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logger.info(f"Processed {processed_count}/{len(logs_df)} logs...")
+                
                 # Prepare log text
                 log_text = self._prepare_log_text(row.to_dict())
+                
+                # Create robust primary key using multiple fields
+                timestamp = str(row.get('timestamp', ''))
+                service_type = str(row.get('service_type', ''))
+                level = str(row.get('level', ''))
+                message = str(row.get('message', ''))
+                instance_id = str(row.get('instance_id', ''))
+                
+                # Create a unique identifier that includes all identifying fields
+                # Include the DataFrame index to ensure uniqueness
+                primary_key_parts = [
+                    str(idx),  # DataFrame index for uniqueness
+                    timestamp,
+                    service_type,
+                    level,
+                    message[:100],  # First 100 chars of message
+                    instance_id
+                ]
+                primary_key = "_".join(primary_key_parts)
+                
+                # Create a hash-based ID for ChromaDB
+                import hashlib
+                log_hash = hashlib.md5(primary_key.encode()).hexdigest()
                 
                 # Handle chunking for long texts
                 if enable_chunking and len(log_text) > self.config['chunk_size']:
@@ -328,22 +326,25 @@ class VectorDBService:
                     
                     for chunk_idx, chunk in enumerate(chunks):
                         # Create unique ID for chunk
-                        chunk_id = f"log_{idx}_chunk_{chunk_idx}_{hash(chunk) % 1000000}"
+                        chunk_id = f"log_{log_hash}_chunk_{chunk_idx}"
                         
                         # Skip if ID already exists
                         if chunk_id in existing_ids:
+                            duplicates_found += 1
                             continue
                         
                         # Prepare metadata for chunk
                         metadata = {
-                            'timestamp': str(row.get('timestamp', '')),
-                            'service_type': str(row.get('service_type', '')),
-                            'level': str(row.get('level', '')),
-                            'instance_id': str(row.get('instance_id', '')),
+                            'timestamp': timestamp,
+                            'service_type': service_type,
+                            'level': level,
+                            'instance_id': instance_id,
                             'original_index': str(idx),
                             'chunk_index': str(chunk_idx),
                             'total_chunks': str(len(chunks)),
-                            'is_chunked': 'true'
+                            'is_chunked': 'true',
+                            'primary_key': primary_key,
+                            'log_hash': log_hash
                         }
                         
                         documents.append(chunk)
@@ -352,22 +353,27 @@ class VectorDBService:
                         existing_ids.add(chunk_id)
                 else:
                     # Create unique ID for single log entry
-                    log_id = f"log_{idx}_{hash(log_text) % 1000000}"
+                    log_id = f"log_{log_hash}"
                     
                     # Skip if ID already exists
                     if log_id in existing_ids:
+                        duplicates_found += 1
+                        if duplicates_found <= 5:  # Log first 5 duplicates for debugging
+                            logger.debug(f"Duplicate found for log {idx}: {log_id}")
                         continue
                     
                     # Prepare metadata
                     metadata = {
-                        'timestamp': str(row.get('timestamp', '')),
-                        'service_type': str(row.get('service_type', '')),
-                        'level': str(row.get('level', '')),
-                        'instance_id': str(row.get('instance_id', '')),
+                        'timestamp': timestamp,
+                        'service_type': service_type,
+                        'level': level,
+                        'instance_id': instance_id,
                         'original_index': str(idx),
                         'chunk_index': '0',
                         'total_chunks': '1',
-                        'is_chunked': 'false'
+                        'is_chunked': 'false',
+                        'primary_key': primary_key,
+                        'log_hash': log_hash
                     }
                     
                     documents.append(log_text)
@@ -375,8 +381,10 @@ class VectorDBService:
                     ids.append(log_id)
                     existing_ids.add(log_id)
             
+            logger.info(f"Processing complete: {len(documents)} new documents, {duplicates_found} duplicates skipped")
+            
             if not documents:
-                logger.info("All documents already exist in vector database")
+                logger.info(f"All documents already exist in vector database (skipped {duplicates_found} duplicates)")
                 return 0
             
             # Generate embeddings
@@ -391,7 +399,7 @@ class VectorDBService:
                     metadatas=metadatas,
                     ids=ids
                 )
-                logger.info(f"Successfully added {len(documents)} documents to vector database")
+                logger.info(f"Successfully added {len(documents)} documents to vector database (skipped {duplicates_found} duplicates)")
             except Exception as e:
                 if "existing embedding ID" in str(e).lower():
                     # Suppress duplicate warnings and log a summary
@@ -445,7 +453,17 @@ class VectorDBService:
                     
                     # Calculate similarity score (convert distance to similarity)
                     distance = results['distances'][0][i]
-                    similarity = 1 - distance  # ChromaDB uses cosine distance
+                    
+                    # FIX: Handle ChromaDB distances that can exceed 1.0
+                    # ChromaDB can return distances > 1.0 due to normalization issues
+                    # Normalize similarity to be non-negative and properly scaled
+                    if distance <= 1.0:
+                        # Normal case: distance 0-1, similarity 1-0
+                        similarity = 1.0 - distance
+                    else:
+                        # ChromaDB returned distance > 1.0 (normalization issue)
+                        # Clamp to 0 similarity (completely dissimilar)
+                        similarity = 0.0
                     
                     similar_logs.append({
                         'document': doc,
@@ -466,25 +484,38 @@ class VectorDBService:
             return []
     
     def get_context_for_issue(self, issue_description: str, top_k: int = None) -> str:
-        """Get historical context for an issue"""
+        """Get historical context for an issue, deduplicating log messages"""
         try:
             similar_logs = self.search_similar_logs(issue_description, top_k=top_k)
-            
             if not similar_logs:
                 return ""
             
+            # Deduplicate logs by (message, service, level, timestamp)
+            seen = set()
+            unique_logs = []
+            for log in similar_logs:
+                key = (
+                    log['document'],
+                    log['metadata'].get('service_type', ''),
+                    log['metadata'].get('level', ''),
+                    log['metadata'].get('timestamp', '')
+                )
+                if key not in seen:
+                    seen.add(key)
+                    unique_logs.append(log)
+                if len(unique_logs) >= (top_k or 5):
+                    break
+
             # Format historical context
             context_parts = []
-            for i, log in enumerate(similar_logs[:5]):  # Top 5 most similar
+            for i, log in enumerate(unique_logs):
                 context_parts.append(f"Historical Log {i+1} (Similarity: {1-log['distance']:.3f}):")
                 context_parts.append(f"  {log['document']}")
                 context_parts.append(f"  Service: {log['metadata']['service_type']}")
                 context_parts.append(f"  Level: {log['metadata']['level']}")
                 context_parts.append(f"  Timestamp: {log['metadata']['timestamp']}")
                 context_parts.append("")
-            
             return "\n".join(context_parts)
-            
         except Exception as e:
             logger.error(f"Failed to get historical context: {e}")
             return ""
@@ -601,7 +632,7 @@ class VectorDBService:
             logger.info(f"Cleared collection: {self.collection_name}")
         except Exception as e:
             logger.error(f"Failed to clear collection: {e}")
-            raise
+            raise 
     
     def is_chromadb_available(self) -> bool:
         """Check if ChromaDB is being used"""
