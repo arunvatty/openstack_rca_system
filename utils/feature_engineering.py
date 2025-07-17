@@ -16,7 +16,7 @@ class FeatureEngineer:
         self.scalers = {}
         
     def create_temporal_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Create temporal features from timestamps"""
+        """Create temporal features from timestamp data"""
         logger.info("Creating temporal features...")
         
         if 'timestamp' not in df.columns:
@@ -25,9 +25,25 @@ class FeatureEngineer:
         
         df = df.copy()
         
-        # Convert to datetime if needed
+        # Convert to datetime if needed - handle different timestamp formats
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            try:
+                # Try parsing with flexible format first
+                df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', errors='coerce')
+            except Exception as e:
+                logger.warning(f"Flexible parsing failed: {e}, trying ISO format")
+                try:
+                    # Fallback to ISO format
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', errors='coerce')
+                except Exception as e2:
+                    logger.warning(f"ISO parsing failed: {e2}, trying default parsing")
+                    # Final fallback to default parsing
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        
+        # Check if we have valid timestamps
+        if df['timestamp'].isna().all():
+            logger.error("All timestamps are invalid after parsing")
+            return df
         
         # Basic temporal features
         df['hour'] = df['timestamp'].dt.hour
