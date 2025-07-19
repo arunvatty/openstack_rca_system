@@ -12,6 +12,11 @@ from monitoring_integration import integrate_monitoring_with_streamlit_app
 # Disable ChromaDB telemetry to prevent errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+# Suppress startup noise
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
+warnings.filterwarnings("ignore")
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))

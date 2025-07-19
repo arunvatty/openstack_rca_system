@@ -17,6 +17,14 @@ monitoring_manager = get_monitoring_manager()
 # Disable ChromaDB telemetry to prevent errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+warnings.filterwarnings("ignore")
+
+# Set logging levels for noisy libraries
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 # Add project root to Python path
 project_root = Path(__file__).parent
