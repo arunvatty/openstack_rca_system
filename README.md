@@ -422,11 +422,15 @@ python main.py --mode setup
 
 ### Phase 2: Model Training
 ```bash
+#Ingest Logs
+python main.py --mode vector-db --action ingest --logs logs/sample_logs/
+python main.py --mode vector-db --action status
+
 # Train LSTM model on OpenStack logs
-python main.py --mode train --logs logs/
+python main.py --mode train --logs logs/sample_logs/
 
 # Clean ChromaDB before training (optional)
-python main.py --mode train --logs logs/ --clean-vector-db
+python main.py --mode train --logs logs/sample_logs/ --clean-vector-db
 ```
 
 ### Phase 3: Root Cause Analysis
@@ -996,3 +1000,5 @@ The OpenStack RCA system now features:
 - ✅ **Performance optimizations** maintaining speed with better accuracy
 
 **The system is now production-ready with enterprise-grade features for OpenStack log analysis and root cause analysis!** 
+
+
