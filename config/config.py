@@ -82,6 +82,90 @@ class Config:
         }
     }
     
+    # MLflow Configuration
+    MLFLOW_CONFIG = {
+        # MLflow Tracking Server
+        'tracking_uri': os.getenv('MLFLOW_TRACKING_URI'),
+        'experiment_name': 'openstack_rca_system_staging',
+        
+        # S3 Artifact Store (set these environment variables)
+        'artifact_root': os.getenv('MLFLOW_ARTIFACT_ROOT', 's3://chandanbam-bucket/group6-capstone'),
+        's3_endpoint_url': os.getenv('MLFLOW_S3_ENDPOINT_URL'),
+        'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID'),
+        'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY'),
+        's3_bucket': os.getenv('MLFLOW_S3_BUCKET', 'chandanbam-bucket'),
+        
+        # Model Registry & Versioning
+        'model_registry_uri': os.getenv('MLFLOW_MODEL_REGISTRY_URI'),
+        'model_name_prefix': 'openstack_rca',
+        'auto_register_model': True,  # Automatically register models
+        'default_model_stage': 'Staging',  # Default stage for new models
+        'auto_promote_threshold': 0.85,  # Auto-promote to Production if accuracy > threshold
+        
+        # Model Lifecycle Management
+        'max_model_versions': 10,  # Maximum versions to keep per model
+        'archive_old_versions': True,  # Auto-archive old versions
+        'production_approval_required': False,  # Require manual approval for Production stage
+        
+        # Run Configuration
+        'auto_log': True,  # Enable automatic logging
+        'log_models': True,  # Log models automatically
+        'log_artifacts': True,  # Log artifacts automatically
+        'tags': {
+            'project': 'openstack_rca_system',
+            'team': 'mlops',
+            'version': '2.0.0',
+            'environment': os.getenv('ENVIRONMENT', 'development')
+        },
+        
+        # Enhanced Logging Configuration
+        'log_system_metrics': True,  # Log system metrics (CPU, memory, etc.)
+        'log_input_examples': True,  # Log input examples for model inference
+        'log_model_signature': True,  # Log model signature
+        'log_conda_env': True,  # Log conda environment
+        'log_pip_requirements': True,  # Log pip requirements
+        
+        # Performance Tracking
+        'track_training_time': True,
+        'track_inference_time': True,
+        'log_feature_importance': True,
+        'log_model_metrics': True,  # Log detailed model metrics
+        'log_hyperparameters': True,  # Log all hyperparameters
+        
+        # Integration Settings
+        'enable_ui_integration': True,  # Enable MLflow in Streamlit UI
+        'enable_auto_logging': True,  # Enable automatic parameter/metric logging
+        'enable_model_serving': True,  # Enable model serving endpoints
+        
+        # Versioning Strategy
+        'versioning_strategy': 'semantic',  # 'semantic', 'timestamp', or 'incremental'
+        'version_format': 'v{major}.{minor}.{patch}',  # Version format template
+        'auto_increment': True,  # Auto-increment version numbers
+        
+        # S3 Configuration
+        's3_model_prefix': 'models/openstack_rca',  # S3 prefix for model artifacts
+        's3_experiment_prefix': 'experiments',  # S3 prefix for experiment artifacts
+        's3_backup_enabled': True,  # Enable S3 backup for critical models
+        
+        # Model Deployment
+        'deployment_targets': ['staging', 'production'],  # Available deployment targets
+        'auto_deploy_staging': True,  # Auto-deploy to staging
+        'auto_deploy_production': False,  # Require manual deployment to production
+        
+        # Monitoring & Alerts
+        'enable_model_monitoring': True,  # Enable model performance monitoring
+        'alert_on_drift': True,  # Alert on model drift
+        'performance_threshold': 0.80,  # Alert if performance drops below threshold
+        
+        # Backup & Recovery
+        'backup_frequency': 'daily',  # Backup frequency (daily, weekly, monthly)
+        'backup_retention_days': 30,  # Days to retain backups
+        'enable_disaster_recovery': True,  # Enable disaster recovery procedures
+    }
+    
+    # MLflow Tracking URI (for backward compatibility)
+    MLFLOW_TRACKING_URI = MLFLOW_CONFIG['tracking_uri']
+    
     # Streamlit Configuration
     STREAMLIT_CONFIG = {
         'page_title': 'CloudTracer RCA Assistant',

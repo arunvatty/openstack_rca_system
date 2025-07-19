@@ -23,3 +23,6 @@ chromadb==0.4.22
 sentence-transformers==2.2.2
 huggingface_hub==0.15.1
 tf-keras
+mlflow>=2.9.0
+boto3>=1.26.0
+botocore>=1.29.0

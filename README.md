@@ -377,6 +377,83 @@ RCA_CONFIG = {
 - Python 3.11+ (Python 3.12 recommended)
 - Anthropic API key for Claude integration
 
+### MLflow Prerequisites (Optional)
+
+**MLflow** provides experiment tracking, model registry, and artifact storage for enhanced ML operations. This is optional but highly recommended for production deployments.
+
+#### 1. Install MLflow
+```bash
+pip install mlflow
+```
+
+#### 2. Setup MLflow Tracking Server
+You have several options for MLflow tracking:
+
+**Option A: Local MLflow Server (Development)**
+```bash
+# Start local MLflow server
+mlflow server --host 0.0.0.0 --port 5000
+```
+
+**Option B: Remote MLflow Server (Production)**
+```bash
+# Set environment variables for remote server
+export MLFLOW_TRACKING_URI=http://your-mlflow-server:5000
+```
+
+**Option C: MLflow with S3 Backend (Recommended for Production)**
+```bash
+# Set environment variables for S3 artifact storage
+export MLFLOW_TRACKING_URI=http://your-mlflow-server:5000
+export MLFLOW_ARTIFACT_ROOT=s3://your-mlflow-bucket/artifacts
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export MLFLOW_S3_ENDPOINT_URL=https://s3.amazonaws.com  # or your S3-compatible endpoint
+```
+
+#### 3. Configure Environment Variables
+Create a `.env` file with MLflow configuration:
+```bash
+# MLflow Configuration
+MLFLOW_TRACKING_URI=http://localhost:5000
+MLFLOW_EXPERIMENT_NAME=openstack_rca_system
+MLFLOW_ARTIFACT_ROOT=s3://your-mlflow-bucket/artifacts
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+MLFLOW_S3_BUCKET=your-mlflow-bucket
+```
+
+#### 4. Verify MLflow Setup
+```bash
+# Test MLflow connection
+python -c "import mlflow; print('MLflow version:', mlflow.__version__); print('Tracking URI:', mlflow.get_tracking_uri())"
+```
+
+#### 5. MLflow Features Available
+When MLflow is enabled, the system provides:
+
+- **🔬 Experiment Tracking**: Automatic logging of hyperparameters, metrics, and artifacts
+- **📊 Model Registry**: Versioned model storage with staging/production lifecycle
+- **📈 Metrics Visualization**: Training loss, accuracy, and custom metrics
+- **🗃️ Artifact Storage**: Model files, plots, and training data stored in S3
+- **🔄 Model Deployment**: Load models from registry for inference
+- **📝 Run Comparison**: Compare different training runs and hyperparameters
+- **🎯 Reproducibility**: Complete experiment reproducibility with tracked parameters
+
+#### 6. Using MLflow with the System
+```bash
+# Enable MLflow during training
+python main.py --mode train --logs logs/ --enable-mlflow
+
+# Disable MLflow (default behavior)
+python main.py --mode train --logs logs/ --disable-mlflow
+
+# View experiments in MLflow UI
+mlflow ui --host 0.0.0.0 --port 5000
+```
+
+Visit `http://localhost:5000` to access the MLflow UI and view your experiments, models, and metrics.
+
 ### Quick Setup
 
 1. **Clone the repository**
@@ -452,13 +529,13 @@ python main.py --mode streamlit
 ### Phase 5: Vector DB Management
 ```bash
 # Check ChromaDB status
-python main.py --mode vector-db --vector-db-action status
+python main.py --mode vector-db --action status
 
 # Clean ChromaDB collection
-python main.py --mode vector-db --vector-db-action clean
+python main.py --mode vector-db --action clean
 
 # Reset ChromaDB database
-python main.py --mode vector-db --vector-db-action reset
+python main.py --mode vector-db --action reset
 ```
 
 ### Phase 6: Performance Testing

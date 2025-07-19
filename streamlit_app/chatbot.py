@@ -39,12 +39,135 @@ class OpenStackRCAAssistant:
             st.session_state.logs_df = pd.DataFrame()
         if 'lstm_model' not in st.session_state:
             st.session_state.lstm_model = None
+        if 'model_source' not in st.session_state:
+            st.session_state.model_source = None
         if 'rca_analyzer' not in st.session_state:
             st.session_state.rca_analyzer = None
         if 'chat_history' not in st.session_state:
             st.session_state.chat_history = []
         if 'vector_db' not in st.session_state:
             st.session_state.vector_db = None
+        if 'mlflow_manager' not in st.session_state:
+            st.session_state.mlflow_manager = None
+        
+        # Initialize MLflow and model loading on first run
+        self._initialize_model_and_mlflow()
+    
+    def _initialize_model_and_mlflow(self):
+        """Initialize MLflow manager and load LSTM model with clear source messaging"""
+        if st.session_state.mlflow_manager is None:
+            try:
+                # Initialize MLflow manager
+                from mlflow_integration.mlflow_manager import MLflowManager
+                
+                # Get MLflow configuration
+                mlflow_uri = getattr(Config, 'MLFLOW_TRACKING_URI', None)
+                experiment_name = Config.MLFLOW_CONFIG.get('experiment_name', 'openstack_rca_system_staging')
+                
+                st.session_state.mlflow_manager = MLflowManager(
+                    tracking_uri=mlflow_uri,
+                    experiment_name=experiment_name,
+                    enable_mlflow=True
+                )
+                
+                st.success("✅ MLflow manager initialized")
+                
+            except Exception as e:
+                st.warning(f"⚠️ MLflow initialization failed: {e}")
+                st.session_state.mlflow_manager = None
+        
+        # Load LSTM model with clear messaging
+        self._load_lstm_model_with_messaging()
+    
+    def _load_lstm_model_with_messaging(self):
+        """Load LSTM model with clear messaging about source (MLflow/S3 vs local)"""
+        if st.session_state.lstm_model is not None:
+            return  # Already loaded
+        
+        st.info("🔄 Loading LSTM model...")
+        
+        # Try MLflow/S3 first
+        if st.session_state.mlflow_manager:
+            try:
+                model_result = st.session_state.mlflow_manager.load_model_with_versioning(
+                    model_name="lstm_model",
+                    version="latest",
+                    stage=None
+                )
+                
+                if model_result is not None:
+                    st.success("✅ **LSTM Model loaded from MLflow/S3** (latest version)")
+                    
+                    # Wrap the MLflow model in our classifier
+                    lstm_model = LSTMLogClassifier(Config.LSTM_CONFIG)
+                    lstm_model.model = model_result
+                    
+                    st.session_state.lstm_model = lstm_model
+                    st.session_state.model_source = "mlflow_s3"
+                    
+                    st.info("🎯 Using same model as CLI application (synchronized)")
+                    return
+                    
+            except Exception as e:
+                st.warning(f"⚠️ MLflow model loading failed: {e}")
+        
+        # Fallback to local model
+        try:
+            local_model_path = "models/lstm_log_classifier.keras"
+            if os.path.exists(local_model_path):
+                lstm_model = LSTMLogClassifier(Config.LSTM_CONFIG)
+                lstm_model.load_model(local_model_path)
+                
+                st.session_state.lstm_model = lstm_model
+                st.session_state.model_source = "local"
+                
+                st.warning("📁 **LSTM Model loaded from LOCAL file**")
+                st.info("💡 For latest model, ensure MLflow/S3 is properly configured")
+                return
+                
+        except Exception as e:
+            st.warning(f"⚠️ Local model loading failed: {e}")
+        
+        # No model available
+        st.error("❌ **No LSTM model available** - Please train a model first")
+        st.session_state.model_source = "none"
+    
+    def _render_model_info_sidebar(self):
+        """Render model information in the sidebar"""
+        if st.session_state.model_source == "mlflow_s3":
+            st.sidebar.success("✅ **MLflow/S3 Model**")
+            st.sidebar.info("🎯 Synced with CLI app")
+            
+            # Show model details if available
+            if st.session_state.mlflow_manager:
+                try:
+                    # Try to get model version info
+                    experiment_name = st.session_state.mlflow_manager.experiment_name
+                    st.sidebar.text(f"Experiment: {experiment_name}")
+                except:
+                    pass
+            
+        elif st.session_state.model_source == "local":
+            st.sidebar.warning("📁 **Local Model**")
+            st.sidebar.info("💡 Not synced with S3")
+            
+        elif st.session_state.model_source == "none":
+            st.sidebar.error("❌ **No Model**")
+            st.sidebar.info("Train a model first")
+            
+        else:
+            st.sidebar.info("🔄 Loading model...")
+        
+        # Refresh model button
+        if st.sidebar.button("🔄 Refresh Model"):
+            st.session_state.lstm_model = None
+            st.session_state.model_source = None
+            self._load_lstm_model_with_messaging()
+            st.rerun()
+        
+        # Show model status for debugging
+        if st.session_state.get('show_debug_info', False):
+            st.sidebar.text(f"Debug: {st.session_state.model_source}")
     
     def run(self):
         """Main application runner"""
@@ -109,6 +232,10 @@ class OpenStackRCAAssistant:
             value=st.session_state.get('show_prompt_global', False),
             help="Show the final prompt sent to the AI model for all analyses"
         )
+        
+        # Model information
+        st.sidebar.subheader("LSTM Model")
+        self._render_model_info_sidebar()
         
         # Data source information
         st.sidebar.subheader("Data Source")
@@ -960,6 +1087,44 @@ nova-compute.log.1.2017-05-16_13:55:31 2017-05-16 00:00:04.500 2931 INFO nova.co
                 
                 # Save model to session state
                 st.session_state.lstm_model = lstm_classifier
+                st.session_state.model_source = "local"  # Initially local
+                
+                # Upload to MLflow/S3 if available
+                if st.session_state.mlflow_manager:
+                    st.info("🔄 Uploading trained model to MLflow/S3...")
+                    try:
+                        # Save model locally first
+                        local_model_path = "models/lstm_log_classifier.keras"
+                        lstm_classifier.save_model(local_model_path)
+                        
+                        # Upload to MLflow/S3
+                        uploaded_info = st.session_state.mlflow_manager.log_model(
+                            model=lstm_classifier.model,
+                            artifact_path="models",
+                            model_name="lstm_model",
+                            metadata={
+                                'training_accuracy': results.get('train_accuracy', 0),
+                                'validation_accuracy': results.get('val_accuracy', 0),
+                                'epochs': epochs,
+                                'batch_size': batch_size,
+                                'lstm_units': lstm_units,
+                                'dropout_rate': dropout_rate,
+                                'trained_via': 'streamlit'
+                            }
+                        )
+                        
+                        if uploaded_info:
+                            st.success("✅ **Model uploaded to MLflow/S3 successfully!**")
+                            st.session_state.model_source = "mlflow_s3"
+                            st.info("🎯 Model now synced with CLI application")
+                        else:
+                            st.warning("⚠️ MLflow upload failed - model saved locally only")
+                            
+                    except Exception as upload_error:
+                        st.warning(f"⚠️ MLflow upload failed: {upload_error}")
+                        st.info("📁 Model saved locally only")
+                else:
+                    st.warning("⚠️ No MLflow manager - model saved locally only")
                 
                 # Update RCA analyzer with trained model
                 if st.session_state.rca_analyzer:

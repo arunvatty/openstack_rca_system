@@ -556,8 +556,8 @@ class RCAAnalyzer:
         for category in priority_categories:
             if category in self.issue_patterns:
                 keywords = self.issue_patterns[category]
-                if any(keyword in issue_lower for keyword in keywords):
-                    return category
+            if any(keyword in issue_lower for keyword in keywords):
+                return category
         
         return 'general'
     
