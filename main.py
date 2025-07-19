@@ -9,6 +9,7 @@ import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
+from monitoring_integration import integrate_monitoring_with_main
 
 # Disable ChromaDB telemetry to prevent errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -461,6 +462,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Add monitoring integration
+    monitoring_manager = integrate_monitoring_with_main()
+
     # Set API key if provided
     if args.api_key:
         os.environ['ANTHROPIC_API_KEY'] = args.api_key
@@ -564,6 +568,9 @@ def main():
             logger.info("Model training completed successfully!")
         else:
             logger.error("Model training failed!")
+
+        if 'lstm_classifier' in locals():
+            lstm_classifier = monitoring_manager.enhance_lstm_classifier(lstm_classifier)
     
     elif args.mode == 'analyze':
         logger.info("Starting RCA analysis...")
@@ -581,6 +588,9 @@ def main():
                 logger.error("No log files found. Please run: python main.py --mode setup")
                 return
         
+        if 'rca_analyzer' in locals():
+            rca_analyzer = monitoring_manager.enhance_rca_analyzer(rca_analyzer)
+            
         results = run_rca_analysis(args.issue, args.logs, args.fast_mode)
         if results:
             logger.info("RCA analysis completed successfully!")

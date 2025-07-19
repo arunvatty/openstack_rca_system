@@ -25,3 +25,9 @@ sentence-transformers>=2.3.0
 huggingface_hub>=0.16.4
 tf-keras
 google-generativeai
+prometheus_client
+flask
+plotly
+pandas
+numpy
+scikit-learn

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import os
 import sys
 from pathlib import Path
+from monitoring_integration import integrate_monitoring_with_streamlit_app
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -45,7 +46,9 @@ class OpenStackRCAAssistant:
             st.session_state.chat_history = []
         if 'vector_db' not in st.session_state:
             st.session_state.vector_db = None
-    
+        
+        integrate_monitoring_with_streamlit_app(self)
+
     def run(self):
         """Main application runner"""
         st.title("🔍 CloudTracer RCA Assistant")
@@ -63,7 +66,8 @@ class OpenStackRCAAssistant:
                 "📊 Dashboard", 
                 "🤖 RCA Chat", 
                 "📈 Log Analysis", 
-                "⚙️ Model Training"
+                "⚙️ Model Training",
+                "🎯 Evaluation Metrics"
             ])
             
             with tab1:
@@ -77,6 +81,9 @@ class OpenStackRCAAssistant:
             
             with tab4:
                 self.render_model_training()
+            with tab5:
+                if hasattr(self, 'evaluation_dashboard'):
+                    self.evaluation_dashboard.render_evaluation_dashboard()
     
     def render_sidebar(self):
         """Render sidebar with configuration options"""
