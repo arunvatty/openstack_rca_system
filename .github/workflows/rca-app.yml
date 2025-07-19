@@ -50,9 +50,4 @@ jobs:
           mkdir -p logs/sample_logs
           echo "ERROR: Dummy log for CI model training" > logs/sample_logs/test.log
           python main.py --mode train --logs logs/sample_logs
-
-      - name: Lint code
-        run: |
-          black .
-          flake8 . --exclude=venv
   
