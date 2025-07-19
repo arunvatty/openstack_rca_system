@@ -1,5 +1,18 @@
 import os
+import warnings
 import logging
+
+# Suppress all startup noise
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
+warnings.filterwarnings("ignore")
+
+# Silence noisy loggers
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+
 import pandas as pd
 from typing import List, Dict, Optional, Tuple
 import numpy as np
