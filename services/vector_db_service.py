@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
+
 import os
+import sys
 import logging
 import pandas as pd
 from typing import List, Dict, Optional, Tuple
@@ -6,6 +9,9 @@ import numpy as np
 import re
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
+
+# Add project root to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import Config
 
@@ -641,3 +647,255 @@ class VectorDBService:
     def get_database_type(self) -> str:
         """Get the type of database being used"""
         return 'chromadb' if self.use_chromadb else 'in_memory' 
+
+
+class VectorDBQueryTool:
+    """CLI utility for querying the vector database"""
+    
+    def __init__(self):
+        try:
+            self.vector_db = VectorDBService()
+            logger.info("VectorDBQueryTool initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize VectorDBQueryTool: {e}")
+            raise
+    
+    def search_similar_logs(self, query: str, top_k: int = 10, 
+                          filter_metadata: Dict = None, include_chunks: bool = False) -> List[Dict]:
+        """Search for logs similar to the query"""
+        try:
+            similar_logs = self.vector_db.search_similar_logs(
+                query, top_k=top_k, filter_metadata=filter_metadata, include_chunks=include_chunks
+            )
+            return similar_logs
+        except Exception as e:
+            logger.error(f"Failed to search similar logs: {e}")
+            return []
+    
+    def get_historical_context(self, issue_description: str, top_k: int = 3) -> str:
+        """Get historical context for an issue"""
+        try:
+            context = self.vector_db.get_context_for_issue(issue_description, top_k=top_k)
+            return context
+        except Exception as e:
+            logger.error(f"Failed to get historical context: {e}")
+            return ""
+    
+    def search_by_service(self, service_name: str, top_k: int = 10) -> List[Dict]:
+        """Search logs by service name"""
+        filter_metadata = {"service": service_name}
+        return self.search_similar_logs(f"service {service_name}", top_k=top_k, filter_metadata=filter_metadata)
+    
+    def search_by_level(self, log_level: str, top_k: int = 10) -> List[Dict]:
+        """Search logs by log level"""
+        filter_metadata = {"level": log_level.upper()}
+        return self.search_similar_logs(f"level {log_level}", top_k=top_k, filter_metadata=filter_metadata)
+    
+    def search_by_instance(self, instance_id: str, top_k: int = 10) -> List[Dict]:
+        """Search logs by instance ID"""
+        return self.search_similar_logs(f"instance {instance_id}", top_k=top_k)
+    
+    def export_collection_to_csv(self, output_file: str) -> bool:
+        """Export collection to CSV file"""
+        try:
+            results = self.vector_db.collection.get()
+            if not results['documents']:
+                logger.warning("No documents found in collection")
+                return False
+            
+            df = pd.DataFrame({
+                'document': results['documents'],
+                'metadata': results['metadatas']
+            })
+            df.to_csv(output_file, index=False)
+            logger.info(f"Exported {len(df)} documents to {output_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to export collection: {e}")
+            return False
+    
+    def get_service_distribution(self) -> Dict:
+        """Get distribution of services in the collection"""
+        try:
+            results = self.vector_db.collection.get()
+            services = {}
+            for metadata in results['metadatas']:
+                service = metadata.get('service', 'unknown')
+                services[service] = services.get(service, 0) + 1
+            return dict(sorted(services.items(), key=lambda x: x[1], reverse=True))
+        except Exception as e:
+            logger.error(f"Failed to get service distribution: {e}")
+            return {}
+    
+    def get_level_distribution(self) -> Dict:
+        """Get distribution of log levels in the collection"""
+        try:
+            results = self.vector_db.collection.get()
+            levels = {}
+            for metadata in results['metadatas']:
+                level = metadata.get('level', 'unknown')
+                levels[level] = levels.get(level, 0) + 1
+            return dict(sorted(levels.items(), key=lambda x: x[1], reverse=True))
+        except Exception as e:
+            logger.error(f"Failed to get level distribution: {e}")
+            return {}
+    
+    def clear_collection(self):
+        """Clear the collection"""
+        self.vector_db.clear_collection()
+
+
+def print_similar_logs(similar_logs: List[Dict], query_info: str = ""):
+    """Print similar logs in a formatted way"""
+    if not similar_logs:
+        print("❌ No similar logs found")
+        return
+    
+    print(f"\n🔍 Found {len(similar_logs)} similar logs" + (f" for {query_info}" if query_info else ""))
+    print("=" * 80)
+    
+    for i, log in enumerate(similar_logs, 1):
+        print(f"\n📄 Log {i}")
+        print(f"🎯 Similarity: {log.get('similarity', 0.0):.3f}")
+        print(f"📅 Timestamp: {log.get('timestamp', 'N/A')}")
+        print(f"🔧 Service: {log.get('service', 'N/A')}")
+        print(f"📊 Level: {log.get('level', 'N/A')}")
+        print(f"📝 Message: {log.get('message', '')[:200]}{'...' if len(log.get('message', '')) > 200 else ''}")
+        print("-" * 80)
+
+
+def print_distribution(title: str, distribution: Dict):
+    """Print distribution data"""
+    if not distribution:
+        print("❌ No distribution data available")
+        return
+    
+    print(f"\n📊 {title}")
+    print("=" * 50)
+    total = sum(distribution.values())
+    
+    for item, count in distribution.items():
+        percentage = (count / total) * 100 if total > 0 else 0
+        print(f"{item:20} | {count:6} ({percentage:5.1f}%)")
+    
+    print(f"{'Total':20} | {total:6} (100.0%)")
+
+
+def main():
+    """CLI main function"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Vector Database Service with CLI functionality",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Get collection statistics
+  python3 services/vector_db_service.py --action stats
+  
+  # Search for similar logs
+  python3 services/vector_db_service.py --action search --query "database timeout" --top-k 10
+  
+  # Get historical context
+  python3 services/vector_db_service.py --action context --query "instance launch failed" --top-k 5
+  
+  # Export collection to CSV
+  python3 services/vector_db_service.py --action export --output logs_export.csv
+        """
+    )
+    
+    parser.add_argument('--action', required=True,
+                       choices=['stats', 'search', 'context', 'service', 'level', 'instance', 
+                               'export', 'service-dist', 'level-dist', 'clear'],
+                       help='Action to perform')
+    
+    parser.add_argument('--query', type=str, help='Search query')
+    parser.add_argument('--service', type=str, help='Service name to filter by')
+    parser.add_argument('--level', type=str, help='Log level to filter by')
+    parser.add_argument('--instance', type=str, help='Instance ID to filter by')
+    parser.add_argument('--top-k', type=int, default=10, help='Number of top results (default: 10)')
+    parser.add_argument('--output', type=str, default='vector_db_export.csv', 
+                       help='Output file for export (default: vector_db_export.csv)')
+    
+    args = parser.parse_args()
+    
+    try:
+        tool = VectorDBQueryTool()
+        
+        if args.action == "stats":
+            stats = tool.vector_db.get_collection_stats()
+            print("\n📊 Vector Database Statistics")
+            print("=" * 50)
+            for key, value in stats.items():
+                print(f"{key:25} | {value}")
+                
+        elif args.action == "search":
+            if not args.query:
+                print("❌ Error: --query is required for search action")
+                return
+            similar_logs = tool.search_similar_logs(args.query, args.top_k)
+            print_similar_logs(similar_logs, f"query='{args.query}'")
+            
+        elif args.action == "context":
+            if not args.query:
+                print("❌ Error: --query is required for context action")
+                return
+            context = tool.get_historical_context(args.query, args.top_k)
+            if context:
+                print(f"\n📚 Historical Context for: '{args.query}'")
+                print("=" * 80)
+                print(context)
+            else:
+                print("❌ No historical context found")
+                
+        elif args.action == "service":
+            if not args.service:
+                print("❌ Error: --service is required for service action")
+                return
+            similar_logs = tool.search_by_service(args.service, args.top_k)
+            print_similar_logs(similar_logs, f"service={args.service}")
+            
+        elif args.action == "level":
+            if not args.level:
+                print("❌ Error: --level is required for level action")
+                return
+            similar_logs = tool.search_by_level(args.level, args.top_k)
+            print_similar_logs(similar_logs, f"level={args.level}")
+            
+        elif args.action == "instance":
+            if not args.instance:
+                print("❌ Error: --instance is required for instance action")
+                return
+            similar_logs = tool.search_by_instance(args.instance, args.top_k)
+            print_similar_logs(similar_logs, f"instance={args.instance}")
+            
+        elif args.action == "export":
+            success = tool.export_collection_to_csv(args.output)
+            if success:
+                print(f"✅ Successfully exported to {args.output}")
+            else:
+                print("❌ Failed to export collection")
+                
+        elif args.action == "service-dist":
+            distribution = tool.get_service_distribution()
+            print_distribution("Service Distribution", distribution)
+            
+        elif args.action == "level-dist":
+            distribution = tool.get_level_distribution()
+            print_distribution("Log Level Distribution", distribution)
+            
+        elif args.action == "clear":
+            confirm = input("⚠️  Are you sure you want to clear the collection? (yes/no): ")
+            if confirm.lower() == 'yes':
+                tool.clear_collection()
+                print("✅ Collection cleared successfully")
+            else:
+                print("❌ Operation cancelled")
+                
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        print(f"❌ Error: {e}")
+
+
+if __name__ == "__main__":
+    main() 

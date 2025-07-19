@@ -348,7 +348,7 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mo
             else:
                 logger.warning("⚠️ No trained model found locally. Training new model...")
                 logger.error("❌ FALLBACK: Both MLflow and local model failed - training new model")
-                lstm_model = train_model_pipeline(clean_vector_db=False) # Pass False as it's not for ingestion
+                lstm_model = train_model_pipeline(clean_vector_db=False, mlflow_manager=mlflow_manager)
                 model_metadata_for_inference = {'model_source': 'freshly_trained'}
     
     # Start MLflow run for inference tracking if enabled
@@ -520,7 +520,7 @@ def test_model_performance(custom_query: str = None, log_files_path: str = None,
         lstm_model.load_model(model_path)
     else:
         logger.warning("No trained model found. Training new model...")
-        lstm_model = train_model_pipeline(clean_vector_db=False)
+        lstm_model = train_model_pipeline(clean_vector_db=False, mlflow_manager=None)
     
     # Initialize RCA analyzer
     rca_analyzer = RCAAnalyzer(Config.ANTHROPIC_API_KEY, lstm_model)
