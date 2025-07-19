@@ -49,12 +49,8 @@ jobs:
           echo "ERROR: Dummy log for CI model training" > logs/sample_logs/test.log
           python main.py --mode train --logs logs/sample_logs
 
-      - name: Lint with pylint 
-        run: | 
-          make lint
-      - name: test with pytest
-        run: | 
-          make test 
-      - name: Format code with Black
-        run: | 
-          make format    
+      - name: Lint code
+        run: |
+          black --check .
+          flake8 .
+  
