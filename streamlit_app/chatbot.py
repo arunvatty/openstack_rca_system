@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 from monitoring_integration import integrate_monitoring_with_streamlit_app
 
+# Disable ChromaDB telemetry to prevent errors
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -62,7 +66,7 @@ class OpenStackRCAAssistant:
             self.render_data_upload_section()
         else:
             # Show tabs for different functionalities
-            tab1, tab2, tab3, tab4 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Dashboard", 
                 "🤖 RCA Chat", 
                 "📈 Log Analysis", 
@@ -81,6 +85,7 @@ class OpenStackRCAAssistant:
             
             with tab4:
                 self.render_model_training()
+           
             with tab5:
                 if hasattr(self, 'evaluation_dashboard'):
                     self.evaluation_dashboard.render_evaluation_dashboard()
