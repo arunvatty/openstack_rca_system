@@ -54,5 +54,5 @@ jobs:
       - name: Lint code
         run: |
           black .
-          flake8 .
+          flake8 . --exclude=venv
   
