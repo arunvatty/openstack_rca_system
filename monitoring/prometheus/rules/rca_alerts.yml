@@ -1,92 +1,74 @@
+# monitoring/rules/rca_alerts.yml
 groups:
-  - name: rca_application_alerts
-    rules:
-      # Application availability
-      - alert: RCAApplicationDown
-        expr: up{job="rca-streamlit"} == 0
-        for: 2m
-        labels:
-          severity: critical
-          service: rca-application
-        annotations:
-          summary: "RCA Application is down"
-          description: "The OpenStack RCA application has been down for more than 2 minutes"
+- name: rca_system_alerts
+  rules:
+  
+  # High error rate in RCA analyses
+  - alert: HighRCAErrorRate
+    expr: (rate(rca_analysis_total{status="error"}[5m]) / rate(rca_analysis_total[5m])) * 100 > 5
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High RCA analysis error rate"
+      description: "RCA analysis error rate is {{ $value }}% which is above 5%"
 
-      # High memory usage
-      - alert: RCAHighMemoryUsage
-        expr: (process_resident_memory_bytes{job="process-exporter",groupname="python"} / 1024 / 1024) > 2048
-        for: 5m
-        labels:
-          severity: warning
-          service: rca-application
-        annotations:
-          summary: "RCA Application high memory usage"
-          description: "Python process is using {{ $value }}MB of memory"
+  # Slow RCA analysis performance
+  - alert: SlowRCAAnalysis
+    expr: histogram_quantile(0.95, rate(rca_analysis_duration_seconds_bucket[5m])) > 30
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "RCA analysis taking too long"
+      description: "95th percentile RCA analysis time is {{ $value }}s"
 
-      # API response time
-      - alert: RCASlowAPIResponse
-        expr: rca_api_request_duration_seconds{quantile="0.95"} > 30
-        for: 3m
-        labels:
-          severity: warning
-          service: rca-api
-        annotations:
-          summary: "RCA API slow response times"
-          description: "95th percentile API response time is {{ $value }}s"
+  # Model accuracy degradation
+  - alert: ModelAccuracyDegraded
+    expr: model_accuracy < 0.8
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "ML model accuracy has degraded"
+      description: "Model accuracy is {{ $value }} which is below 80%"
 
-      # Error rate
-      - alert: RCAHighErrorRate
-        expr: rate(rca_errors_total[5m]) > 0.1
-        for: 2m
-        labels:
-          severity: critical
-          service: rca-application
-        annotations:
-          summary: "High error rate in RCA application"
-          description: "Error rate is {{ $value }} errors per second"
+  # High memory usage
+  - alert: HighMemoryUsage
+    expr: (system_memory_usage_bytes / 1024 / 1024 / 1024) > 4
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High system memory usage"
+      description: "System memory usage is {{ $value }}GB"
 
-      # LSTM model performance
-      - alert: RCAModelLowAccuracy
-        expr: rca_lstm_model_accuracy < 0.8
-        for: 1m
-        labels:
-          severity: warning
-          service: rca-ml
-        annotations:
-          summary: "LSTM model accuracy degraded"
-          description: "Model accuracy is {{ $value }}, below threshold of 0.8"
+  # Vector DB issues
+  - alert: VectorDBConnectionIssues
+    expr: rate(vector_db_operations_total{status="error"}[5m]) > 0.1
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Vector database connection issues"
+      description: "Vector DB error rate is {{ $value }} ops/sec"
 
-      # Disk space for logs
-      - alert: RCALogDiskSpaceLow
-        expr: (node_filesystem_avail_bytes{mountpoint="/var/log"} / node_filesystem_size_bytes{mountpoint="/var/log"}) * 100 < 10
-        for: 5m
-        labels:
-          severity: warning
-          service: system
-        annotations:
-          summary: "Low disk space for logs"
-          description: "Only {{ $value }}% disk space remaining for logs"
+  # No recent analyses (system might be down)
+  - alert: NoRecentAnalyses
+    expr: increase(rca_analysis_total[10m]) == 0
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No RCA analyses performed recently"
+      description: "No RCA analyses have been performed in the last 10 minutes"
 
-  - name: rca_system_alerts
-    rules:
-      # CPU usage
-      - alert: RCAHighCPUUsage
-        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
-        for: 10m
-        labels:
-          severity: warning
-          service: system
-        annotations:
-          summary: "High CPU usage"
-          description: "CPU usage is {{ $value }}%"
-
-      # Load average
-      - alert: RCAHighLoadAverage
-        expr: node_load1 > 4
-        for: 5m
-        labels:
-          severity: warning
-          service: system
-        annotations:
-          summary: "High load average"
-          description: "Load average is {{ $value }}"
+  # Low user satisfaction
+  - alert: LowUserSatisfaction
+    expr: rate(user_satisfaction_score_sum[1h]) / rate(user_satisfaction_score_count[1h]) < 3
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low user satisfaction with RCA results"
+      description: "Average user satisfaction is {{ $value }}/5"

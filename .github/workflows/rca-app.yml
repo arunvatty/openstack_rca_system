@@ -1,0 +1,53 @@
+name: RCA App CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install black
+          pip install black flake8
+
+      - name: Set up .env file
+        run: |
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" > .env
+          echo "DATA_DIR=logs" >> .env
+          echo "MODELS_DIR=saved_models" >> .env
+
+      - name: Run setup step
+        run: |
+          python main.py --mode setup
+
+      - name: Run Tests
+        run: |
+          python test_rca.py
+          
+      - name: Train model with dummy logs
+        run: |
+          mkdir -p logs/sample_logs
+          echo "ERROR: Dummy log for CI model training" > logs/sample_logs/test.log
+          python main.py --mode train --logs logs/sample_logs
+  

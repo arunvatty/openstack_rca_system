@@ -7,6 +7,16 @@ from datetime import datetime, timedelta
 import os
 import sys
 from pathlib import Path
+from monitoring_integration import integrate_monitoring_with_streamlit_app
+
+# Disable ChromaDB telemetry to prevent errors
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+# Suppress startup noise
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
+warnings.filterwarnings("ignore")
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -45,7 +55,9 @@ class OpenStackRCAAssistant:
             st.session_state.chat_history = []
         if 'vector_db' not in st.session_state:
             st.session_state.vector_db = None
-    
+        
+        integrate_monitoring_with_streamlit_app(self)
+
     def run(self):
         """Main application runner"""
         st.title("🔍 CloudTracer RCA Assistant")
@@ -59,11 +71,12 @@ class OpenStackRCAAssistant:
             self.render_data_upload_section()
         else:
             # Show tabs for different functionalities
-            tab1, tab2, tab3, tab4 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Dashboard", 
                 "🤖 RCA Chat", 
                 "📈 Log Analysis", 
-                "⚙️ Model Training"
+                "⚙️ Model Training",
+                "🎯 Evaluation Metrics"
             ])
             
             with tab1:
@@ -77,6 +90,10 @@ class OpenStackRCAAssistant:
             
             with tab4:
                 self.render_model_training()
+           
+            with tab5:
+                if hasattr(self, 'evaluation_dashboard'):
+                    self.evaluation_dashboard.render_evaluation_dashboard()
     
     def render_sidebar(self):
         """Render sidebar with configuration options"""

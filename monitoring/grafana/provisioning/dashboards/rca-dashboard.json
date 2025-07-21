@@ -1,0 +1,427 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "OpenStack RCA System Monitoring",
+    "tags": ["openstack", "rca", "ai", "monitoring"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "System Overview",
+        "type": "stat",
+        "gridPos": {
+          "h": 6,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "targets": [
+          {
+            "expr": "rca_analysis_total",
+            "legendFormat": "Total Analyses",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(rca_analysis_total[5m]) * 60",
+            "legendFormat": "Analyses/min",
+            "refId": "B"
+          },
+          {
+            "expr": "active_users",
+            "legendFormat": "Active Users",
+            "refId": "C"
+          },
+          {
+            "expr": "vector_db_documents_total",
+            "legendFormat": "Vector DB Docs",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 50},
+                {"color": "red", "value": 100}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "RCA Analysis Performance",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 6
+        },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(rca_analysis_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(rca_analysis_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile (median)",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(rca_analysis_duration_seconds_sum[5m]) / rate(rca_analysis_duration_seconds_count[5m])",
+            "legendFormat": "Average",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear",
+              "lineWidth": 2,
+              "fillOpacity": 10,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "insertNulls": false,
+              "showPoints": "auto",
+              "pointSize": 5
+            },
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Analysis Success Rate",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 6
+        },
+        "targets": [
+          {
+            "expr": "rate(rca_analysis_total{status=\"success\"}[5m]) / rate(rca_analysis_total[5m]) * 100",
+            "legendFormat": "Success Rate %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 80},
+                {"color": "green", "value": 95}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Model Performance Metrics",
+        "type": "stat",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 0,
+          "y": 14
+        },
+        "targets": [
+          {
+            "expr": "model_accuracy",
+            "legendFormat": "Accuracy",
+            "refId": "A"
+          },
+          {
+            "expr": "model_precision",
+            "legendFormat": "Precision",
+            "refId": "B"
+          },
+          {
+            "expr": "model_recall",
+            "legendFormat": "Recall",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.7},
+                {"color": "green", "value": 0.85}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "LSTM Inference Performance",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 8,
+          "y": 14
+        },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(lstm_inference_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(lstm_inference_duration_seconds_sum[5m]) / rate(lstm_inference_duration_seconds_count[5m])",
+            "legendFormat": "Average",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Vector DB Operations",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 16,
+          "y": 14
+        },
+        "targets": [
+          {
+            "expr": "rate(vector_db_operations_total[5m]) * 60",
+            "legendFormat": "{{operation}} ops/min",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops"
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Log Processing Volume",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 12,
+          "x": 0,
+          "y": 20
+        },
+        "targets": [
+          {
+            "expr": "rate(logs_processed_total[5m]) * 60",
+            "legendFormat": "{{level}} logs/min",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "logs/min"
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Analysis Categories Distribution",
+        "type": "piechart",
+        "gridPos": {
+          "h": 6,
+          "w": 12,
+          "x": 12,
+          "y": 20
+        },
+        "targets": [
+          {
+            "expr": "sum by (category) (rca_analysis_total)",
+            "legendFormat": "{{category}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "System Resource Usage",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 0,
+          "y": 26
+        },
+        "targets": [
+          {
+            "expr": "system_memory_usage_bytes / 1024 / 1024",
+            "legendFormat": "System Memory (MB)",
+            "refId": "A"
+          },
+          {
+            "expr": "model_memory_usage_bytes / 1024 / 1024",
+            "legendFormat": "Model Memory (MB)",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "decbytes"
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "User Satisfaction Scores",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 8,
+          "y": 26
+        },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(user_satisfaction_score_bucket[5m]))",
+            "legendFormat": "Median Satisfaction",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(user_satisfaction_score_sum[5m]) / rate(user_satisfaction_score_count[5m])",
+            "legendFormat": "Average Satisfaction",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 1,
+            "max": 5,
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Cache Performance",
+        "type": "stat",
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 16,
+          "y": 26
+        },
+        "targets": [
+          {
+            "expr": "cache_hit_rate * 100",
+            "legendFormat": "{{cache_type}} Hit Rate",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 50},
+                {"color": "green", "value": 80}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 12,
+        "title": "Analysis Mode Usage",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 12,
+          "x": 0,
+          "y": 32
+        },
+        "targets": [
+          {
+            "expr": "rate(rca_analysis_total{mode=\"hybrid\"}[5m]) * 60",
+            "legendFormat": "Hybrid Mode",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(rca_analysis_total{mode=\"fast\"}[5m]) * 60",
+            "legendFormat": "Fast Mode",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "analyses/min"
+          }
+        }
+      },
+      {
+        "id": 13,
+        "title": "Analysis Relevance Score",
+        "type": "timeseries",
+        "gridPos": {
+          "h": 6,
+          "w": 12,
+          "x": 12,
+          "y": 32
+        },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.90, rate(analysis_relevance_score_bucket[5m]))",
+            "legendFormat": "90th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(analysis_relevance_score_sum[5m]) / rate(analysis_relevance_score_count[5m])",
+            "legendFormat": "Average",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit"
+          }
+        }
+      }
+    ]
+  }
+}

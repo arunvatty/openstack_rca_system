@@ -65,8 +65,36 @@ logs/temp_*
 saved_models/*.h5
 saved_models/*.pkl
 saved_models/*.joblib
+saved_models/*.keras
 saved_models/large_models/
 !saved_models/.gitkeep
+data/model/
+models/
+
+# MLFlow Tracking (NEW)
+mlruns/
+mlflow.db
+mlflow-runs/
+experiments/
+artifacts/
+
+# ChromaDB and Vector Database (NEW)
+chroma_db/
+vector_db/
+*.chroma
+embeddings_cache/
+
+# Prometheus Metrics and Monitoring (NEW)
+prometheus_data/
+metrics_cache/
+monitoring_logs/
+
+# Cache and Performance Files (NEW)
+cache/
+.cache/
+log_cache/
+*.cache
+performance_logs/
 
 # Data Files
 data/*.csv
@@ -75,12 +103,15 @@ data/raw_logs/
 data/processed/
 data/temp/
 !data/sample/
+data/cache/
 
 # Temporary Files
 *.tmp
 *.temp
 temp/
 tmp/
+test_*.py
+test_*.log
 
 # OS Files
 .DS_Store
@@ -135,12 +166,15 @@ local_settings.py
 passwords.txt
 credentials.json
 secrets/
+gemini-service-account.json
 
 # Large Files
 *.zip
 *.tar.gz
 *.rar
 large_datasets/
+*.model
+*.bin
 
 # Node.js (if using any web components)
 node_modules/
@@ -149,5 +183,20 @@ yarn-debug.log*
 yarn-error.log*
 
 # Streamlit
-.streamlit/secrets.tomlclaude-env/
-logs/
+.streamlit/secrets.toml
+
+# Training and Evaluation Exports (NEW)
+training_data_*.csv
+rca_analyses_*.csv
+mlflow_experiments_*.csv
+prometheus_metrics_*.txt
+
+# Jupyter and Analysis Notebooks (NEW)
+*.ipynb
+analysis/
+notebooks/
+exploratory/
+
+# Docker and Containerization (for future use)
+docker-compose.override.yml
+.dockerignore

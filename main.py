@@ -7,12 +7,25 @@ import os
 import sys
 import argparse
 import logging
+import warnings
 from pathlib import Path
 from datetime import datetime
+from monitoring_integration import integrate_monitoring_with_main
+
+from monitoring_integration import get_monitoring_manager, enhance_train_model_pipeline, enhance_rca_analysis
+monitoring_manager = get_monitoring_manager()
 
 # Disable ChromaDB telemetry to prevent errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY_ENABLED"] = "False"
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+warnings.filterwarnings("ignore")
+
+# Set logging levels for noisy libraries
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 # Add project root to Python path
 project_root = Path(__file__).parent
@@ -31,6 +44,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+monitoring_manager = integrate_monitoring_with_main()
 
 def setup_directories():
     """Create necessary directories"""
@@ -102,6 +116,10 @@ def train_model_pipeline(clean_vector_db: bool = False):
     lstm_classifier = LSTMLogClassifier(Config.LSTM_CONFIG)
     results = lstm_classifier.train(X, y)
     
+    # Log training metrics
+    monitoring_manager.log_training_metrics(results)
+    monitoring_manager.storage.log_training_run(Config.LSTM_CONFIG, results)
+    
     # Step 5: Save model
     model_path = os.path.join(Config.MODELS_DIR, 'lstm_log_classifier.keras')
     lstm_classifier.save_model(model_path)
@@ -170,8 +188,15 @@ def run_rca_analysis(issue_description: str, log_files_path: str = None, fast_mo
         return
     
     # Perform RCA analysis
+    # Perform RCA analysis with monitoring
     logger.info(f"Analyzing issue: {issue_description}")
+    start_time = time.time()
     results = rca_analyzer.analyze_issue(issue_description, logs_df, fast_mode=fast_mode)
+    processing_time = time.time() - start_time
+    
+    # Log metrics
+    mode = 'fast' if fast_mode else 'hybrid'
+    monitoring_manager.log_rca_metrics(issue_description, results, processing_time, mode)
     
     # Display results
     print("\n" + "="*50)
@@ -461,6 +486,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Add monitoring integration
+    monitoring_manager = integrate_monitoring_with_main()
+
     # Set API key if provided
     if args.api_key:
         os.environ['ANTHROPIC_API_KEY'] = args.api_key
@@ -560,10 +588,15 @@ def main():
             logger.info("📊 ChromaDB will retain existing data (use --clean-vector-db to reset)")
         
         model = train_model_pipeline(clean_vector_db=args.clean_vector_db)
+        if 'lstm_classifier' in locals():
+            lstm_classifier = monitoring_manager.enhance_lstm_classifier(lstm_classifier)
+        
         if model:
             logger.info("Model training completed successfully!")
         else:
             logger.error("Model training failed!")
+
+        
     
     elif args.mode == 'analyze':
         logger.info("Starting RCA analysis...")
@@ -581,6 +614,12 @@ def main():
                 logger.error("No log files found. Please run: python main.py --mode setup")
                 return
         
+        if 'rca_analyzer' in locals():
+            rca_analyzer = monitoring_manager.enhance_rca_analyzer(rca_analyzer)
+
+            if 'rca_analyzer' in locals():
+                rca_analyzer = monitoring_manager.enhance_rca_analyzer(rca_analyzer)
+            
         results = run_rca_analysis(args.issue, args.logs, args.fast_mode)
         if results:
             logger.info("RCA analysis completed successfully!")
