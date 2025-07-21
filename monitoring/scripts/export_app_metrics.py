@@ -50,7 +50,7 @@ class RCAMetricsCollector:
     def __init__(self):
         self.project_root = Path(__file__).parent.parent.parent
         self.logs_dir = self.project_root / 'logs'
-        self.models_dir = self.project_root / 'saved_models'
+        self.models_dir = self.project_root / 'data/model'
         
     def collect_metrics(self) -> str:
         """Collect all metrics and return in Prometheus format"""
