@@ -1,7 +1,9 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv # type: ignore
+from pathlib import Path
+dotenv_path = Path("config/.env")
 
-load_dotenv()
+load_dotenv(dotenv_path=dotenv_path)
 
 class Config:
     # API Configuration
